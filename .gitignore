@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Training output
+runs/
+submission/
+*.log
+
+# Checkpoints other than the one we ship
+*.pt
+!RL_Model/best.pt
+
+# The professor's files and generated maps stay out of the repo
+*.xml
+Project_description.pdf
