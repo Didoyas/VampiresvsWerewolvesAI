@@ -1,1 +1,0 @@
-"""Vampires VS Werewolves agent."""
