@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "../ngs/src/opponent_history.hpp"
+
 #ifdef _WIN32
     #ifndef NOMINMAX
         #define NOMINMAX
@@ -483,6 +485,114 @@ private:
 };
 
 // -----------------------------------------------------------------------------
+// Historical board snapshot adapter
+// -----------------------------------------------------------------------------
+// Call only after MAP/UPD has been fully applied to GameState. The history
+// module stores complete reconstructed boards, not sparse UPD packets.
+static void recordHistorySnapshot(
+    history::OpponentHistory& opponentHistory,
+    const GameState& state,
+    std::uint32_t& updateNumber)
+{
+    const std::size_t width = state.columns();
+    const std::size_t height = state.rows();
+
+    std::vector<history::HistoryCell> snapshotCells;
+    snapshotCells.reserve(width * height);
+
+    // HistoryCell storage is row-major: index = y * width + x.
+    for (std::size_t y = 0; y < height; ++y) {
+        for (std::size_t x = 0; x < width; ++x) {
+            const Cell& cell = state.cellAt(
+                static_cast<std::uint8_t>(x),
+                static_cast<std::uint8_t>(y));
+
+            snapshotCells.emplace_back(
+                static_cast<std::uint32_t>(cell.humans),
+                static_cast<std::uint32_t>(cell.vampires),
+                static_cast<std::uint32_t>(cell.werewolves),
+                cell.isHouse);
+        }
+    }
+
+    ++updateNumber;
+    opponentHistory.record(width, height, snapshotCells, updateNumber);
+}
+
+// -----------------------------------------------------------------------------
+// Temporary protocol-test move
+// -----------------------------------------------------------------------------
+// This is deliberately NOT an AI strategy and is not NGS. It only allows the
+// client to produce a legal one-group response while communication is tested.
+// Replace this function later with the NGS decision module.
+
+static std::optional<Move> chooseProtocolSmokeTestMove(const GameState& state) {
+    if (state.ourSpecies() == Species::Unknown) {
+        return std::nullopt;
+    }
+
+    static constexpr std::array<std::pair<int, int>, 8> directions{{
+        {-1, -1}, {0, -1}, {1, -1},
+        {-1,  0},          {1,  0},
+        {-1,  1}, {0,  1}, {1,  1}
+    }};
+
+    int bestScore = -1000000000;
+    std::optional<Move> bestMove;
+
+    for (int y = 0; y < state.rows(); ++y) {
+        for (int x = 0; x < state.columns(); ++x) {
+            const Cell& source = state.cellAt(static_cast<std::uint8_t>(x),
+                                              static_cast<std::uint8_t>(y));
+            const std::uint8_t count = state.ourCount(source);
+            if (count == 0) continue;
+
+            for (const auto& [dx, dy] : directions) {
+                const int targetX = x + dx;
+                const int targetY = y + dy;
+                if (targetX < 0 || targetY < 0 ||
+                    targetX >= state.columns() || targetY >= state.rows()) {
+                    continue;
+                }
+
+                const Cell& target = state.cellAt(static_cast<std::uint8_t>(targetX),
+                                                  static_cast<std::uint8_t>(targetY));
+                int score = 100;
+
+                if (target.humans > 0) {
+                    score = (count >= target.humans) ? 10000 + target.humans : -500;
+                } else if (state.enemyCount(target) > 0) {
+                    const int attackers = count;
+                    const int defenders = state.enemyCount(target);
+                    if (2 * attackers >= 3 * defenders) {
+                        score = 8000 + defenders;       // certain win under the 1.5x rule
+                    } else if (2 * defenders >= 3 * attackers) {
+                        score = -10000;                 // avoid a certain loss if possible
+                    } else {
+                        score = -1000;                  // avoid a random fight if possible
+                    }
+                } else if (state.ourCount(target) > 0) {
+                    score = 1000 + state.ourCount(target); // regrouping is legal
+                }
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMove = Move{
+                        static_cast<std::uint8_t>(x),
+                        static_cast<std::uint8_t>(y),
+                        count,
+                        static_cast<std::uint8_t>(targetX),
+                        static_cast<std::uint8_t>(targetY)
+                    };
+                }
+            }
+        }
+    }
+
+    return bestMove;
+}
+
+// -----------------------------------------------------------------------------
 // Game lifecycle: SET -> HUM -> HME -> MAP -> repeated UPD -> MOV; END resets.
 // -----------------------------------------------------------------------------
 
@@ -529,6 +639,12 @@ static void playConnection(ClientSocket& client) {
             throw std::runtime_error("Could not infer our species from HME and MAP");
         }
 
+        // One history buffer per game. Start with the complete MAP snapshot.
+        // It is destroyed automatically when this game ends.
+        history::OpponentHistory opponentHistory;
+        std::uint32_t historyUpdateNumber = 0;
+        recordHistorySnapshot(opponentHistory, state, historyUpdateNumber);
+
         std::cerr << "Game initialized: " << static_cast<int>(state.rows())
                   << " rows x " << static_cast<int>(state.columns()) << " columns; species="
                   << (state.ourSpecies() == Species::Vampires ? "vampires" : "werewolves")
@@ -554,6 +670,13 @@ static void playConnection(ClientSocket& client) {
                 const auto receivedAt = std::chrono::steady_clock::now();
                 state.apply(message);
 
+                // UPD contains changed cell values. GameState applies those
+                // values to the persistent board; save the resulting full board.
+                recordHistorySnapshot(
+                    opponentHistory,
+                    state,
+                    historyUpdateNumber);
+
                 const std::optional<Move> move = chooseProtocolSmokeTestMove(state);
                 std::vector<Move> moves;
                 if (move.has_value()) {
@@ -566,7 +689,9 @@ static void playConnection(ClientSocket& client) {
                     sentAt - receivedAt).count();
 
                 std::cerr << "Received UPD (" << message.updates.size() << " cell updates), sent MOV ("
-                          << moves.size() << " move(s)); local handling time " << elapsedMs << " ms\n";
+                          << moves.size() << " move(s)); history snapshots "
+                          << opponentHistory.size() << "; local handling time "
+                          << elapsedMs << " ms\n";
                 continue;
             }
 
