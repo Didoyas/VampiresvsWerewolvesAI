@@ -41,10 +41,11 @@ struct ValidationOptions {
     bool requirePreviousPlyFootprint{true};
 };
 
-// Validate the complete movement plan without changing it.
+// Validate a complete movement plan for the specified species.
 ValidationResult validateTurnPlan(
     const BoardState& board,
     const TurnPlan& plan,
+    Species actingSpecies,
     ValidationOptions options = {}
 );
 
