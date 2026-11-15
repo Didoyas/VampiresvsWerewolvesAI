@@ -1,8 +1,8 @@
-
 #pragma once
 
 #include "candidate_ranker.hpp"
 #include "multi_move_candidate_generator.hpp"
+#include "opponent_predictor.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -11,25 +11,35 @@
 namespace vvw::ngs {
 
 struct OpponentSearchOptions {
-    // Stage 3 settings used to rank and shortlist our initial candidates.
+    // Stage 3: initial ranking of our root candidate plans.
     CandidateRankingOptions rootRankingOptions{};
 
-    // Stage 2 settings used to generate the opponent's responses.
+    // Stage 2: generation of the opponent's possible responses.
     MultiMoveCandidateOptions opponentGenerationOptions{};
 
-    // Number of our top-ranked candidates examined by this search.
+    // Maximum number of our candidate plans examined.
     std::size_t maxRootCandidates{6};
 
-    // Maximum number of opponent responses examined per simulated position.
+    // Total number of unique opponent responses examined
+    // per root simulation.
     std::size_t maxOpponentResponses{24};
 
-    // Number of random transition simulations per root candidate.
+    // Maximum number selected using historical predictions.
+    std::size_t maxLikelyOpponentResponses{16};
+
+    // Maximum number selected through tactical threat ranking,
+    // including responses that also belong to the prediction pool.
+    std::size_t maxAdversarialOpponentResponses{24};
+
     std::size_t simulationsPerRootCandidate{2};
 
-    // Final score = mean worst-response score - riskAversion * stddev.
+    // Final score = mean combined score - riskAversion * stddev.
     double riskAversion{0.0};
 
-    // Reproducible random simulations.
+    // Combined expected and worst-case response weights.
+    double expectedResponseWeight{0.70};
+    double worstCaseResponseWeight{0.30};
+
     std::uint32_t baseRandomSeed{0x5EED1234u};
 };
 
@@ -45,23 +55,30 @@ enum class OpponentSearchError {
 };
 
 struct RootCandidateScore {
-    // Index into the original vector passed to searchTurnCandidates().
+    // Index into the original root candidate vector.
     std::size_t candidateIndex{0};
 
-    // Average score after our opponent's strongest generated response.
+    // Average of the worst evaluated response in each simulation.
     double meanWorstResponseScore{0.0};
 
-    // Variation in the worst-response scores across simulations.
+    // Average of prediction-weighted expected response scores.
+    double meanExpectedResponseScore{0.0};
+
+    // Average of the combined expected/worst-case scores.
+    double meanCombinedResponseScore{0.0};
+
     double standardDeviation{0.0};
 
-    // Final score used to order our root candidates.
+    // Score used to rank this root candidate.
     double rankingScore{0.0};
 
-    // Number of simulations that completed successfully.
     std::size_t simulationsCompleted{0};
 
-    // Total opponent responses examined across those simulations.
     std::size_t opponentResponsesExamined{0};
+
+    std::size_t predictedResponsesExamined{0};
+
+    std::size_t adversarialResponsesExamined{0};
 };
 
 struct OpponentSearchStats {
@@ -76,46 +93,73 @@ struct OpponentSearchStats {
     std::size_t opponentGenerationFailures{0};
 
     std::size_t opponentResponsesGenerated{0};
-    std::size_t opponentResponsesExamined{0};
     std::size_t opponentResponsesSkippedByBudget{0};
+
+    // Unique responses selected through each selection mechanism.
+    std::size_t responsesSelectedByPrediction{0};
+    std::size_t responsesSelectedForAdversarialCoverage{0};
+
+    std::size_t opponentResponsesExamined{0};
+    std::size_t opponentResponsesEvaluated{0};
 
     std::size_t opponentTransitionFailures{0};
     std::size_t evaluationFailures{0};
 
     std::size_t simulationsWithoutOpponentResponse{0};
     std::size_t simulationsCompleted{0};
+
+    // Prediction availability and fallback information.
+    bool predictionsUsed{false};
+    bool predictionFallbackUsed{false};
 };
 
 struct OpponentSearchResult {
     OpponentSearchError error{OpponentSearchError::None};
 
-    // Sorted from best to worst for our species.
     std::vector<RootCandidateScore> ranked;
 
-    // These fields refer to the original input candidate vector.
     bool hasBestCandidate{false};
     std::size_t bestCandidateIndex{0};
 
     OpponentSearchStats stats{};
+
+    // Non-None when the history-aware overload could not
+    // obtain valid predictions and used tactical fallback.
+    OpponentPredictionError predictionError{
+        OpponentPredictionError::None
+    };
 
     bool valid() const noexcept {
         return error == OpponentSearchError::None;
     }
 };
 
-// Performs a bounded search:
-// 1. Rank our candidates using Stage 3.
-// 2. Keep the strongest root candidates.
-// 3. Generate opponent responses after each simulated root move.
-// 4. Evaluate the resulting positions after the opponent's response.
-// 5. Rank our candidates by their average worst-response score.
-//
-// The caller can retrieve the selected plan using:
-// candidates[result.bestCandidateIndex]
+// -------------------------------------------------------------
+// Original history-independent API.
+// Retained for compatibility and early-game fallback.
+// -------------------------------------------------------------
+
 OpponentSearchResult searchTurnCandidates(
     const BoardState& board,
     const std::vector<TurnPlan>& candidates,
     Species actingSpecies,
+    const OpponentSearchOptions& options = {}
+);
+
+// -------------------------------------------------------------
+// New history-aware API.
+//
+// The search invokes predictOpponentBehaviour() using the
+// supplied history and current turn, then uses the resulting
+// predictions to prioritise opponent responses.
+// -------------------------------------------------------------
+
+OpponentSearchResult searchTurnCandidates(
+    const BoardState& board,
+    const std::vector<TurnPlan>& candidates,
+    Species actingSpecies,
+    const OpponentHistory& history,
+    std::uint32_t currentTurn,
     const OpponentSearchOptions& options = {}
 );
 
