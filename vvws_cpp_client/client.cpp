@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "../ngs/src/opponent_history.hpp"
+#include "../ngs/src/agent.hpp"
 
 #ifdef _WIN32
     #ifndef NOMINMAX
@@ -33,6 +33,20 @@
 #endif
 
 namespace vvw {
+
+// Diagnostics go to stderr so they remain visible in PowerShell and do not
+// interfere with any protocol bytes sent over the TCP socket.
+static void logInfo(const std::string& message) {
+    std::cerr << "[INFO] " << message << '\n';
+}
+
+static void logTx(const std::string& message) {
+    std::cerr << "[TX]   " << message << '\n';
+}
+
+static void logRx(const std::string& message) {
+    std::cerr << "[RX]   " << message << '\n';
+}
 
 // -----------------------------------------------------------------------------
 // Protocol data types
@@ -95,8 +109,12 @@ public:
         if (result != 0) {
             throw std::runtime_error("WSAStartup failed: " + std::to_string(result));
         }
+        logInfo("Winsock initialized (2.2)");
     }
-    ~SocketRuntime() { WSACleanup(); }
+    ~SocketRuntime() {
+        WSACleanup();
+        logInfo("Winsock cleaned up");
+    }
     SocketRuntime(const SocketRuntime&) = delete;
     SocketRuntime& operator=(const SocketRuntime&) = delete;
 };
@@ -145,7 +163,10 @@ public:
         for (unsigned char ch : name) {
             packet.push_back(static_cast<std::uint8_t>(ch));
         }
+        logTx("NME name=\"" + name + "\" (" +
+              std::to_string(name.size()) + " byte(s))");
         sendAll(packet);
+        logInfo("NME handshake sent");
     }
 
     Message readMessage() {
@@ -157,10 +178,12 @@ public:
 
         if (command == "END") {
             message.command = Command::End;
+            logRx("END (game finished)");
             return message;
         }
         if (command == "BYE") {
             message.command = Command::Bye;
+            logRx("BYE (server is closing the session)");
             return message;
         }
 
@@ -168,6 +191,8 @@ public:
             message.command = Command::Set;
             message.rows = readByte();
             message.columns = readByte();
+            logRx("SET rows=" + std::to_string(message.rows) +
+                  " columns=" + std::to_string(message.columns));
             return message;
         }
 
@@ -181,6 +206,7 @@ public:
                 p.y = readByte();
                 message.houses.push_back(p);
             }
+            logRx("HUM house_count=" + std::to_string(message.houses.size()));
             return message;
         }
 
@@ -188,6 +214,8 @@ public:
             message.command = Command::Hme;
             message.position.x = readByte();
             message.position.y = readByte();
+            logRx("HME home_position=(" + std::to_string(message.position.x) +
+                  "," + std::to_string(message.position.y) + ")");
             return message;
         }
 
@@ -204,6 +232,8 @@ public:
                 update.werewolves = readByte();
                 message.updates.push_back(update);
             }
+            logRx(command + " cell_update_count=" +
+                  std::to_string(message.updates.size()));
             return message;
         }
 
@@ -228,7 +258,11 @@ public:
             packet.push_back(move.targetY);
         }
 
+        // Log the packet summary only. Avoid printing every move during a match,
+        // because excessive console output can consume part of the 2-second budget.
+        logTx("MOV move_count=" + std::to_string(moves.size()));
         sendAll(packet);
+        logInfo("MOV packet sent");
     }
 
 private:
@@ -249,6 +283,7 @@ private:
         hints.ai_protocol = IPPROTO_TCP;
 
         const std::string service = std::to_string(port_);
+        logInfo("Resolving server address " + ip_ + ":" + service);
         addrinfo* addresses = nullptr;
         const int lookupResult = getaddrinfo(ip_.c_str(), service.c_str(), &hints, &addresses);
         if (lookupResult != 0) {
@@ -259,6 +294,7 @@ private:
 #endif
         }
 
+        logInfo("Address resolution succeeded; attempting TCP connection");
         int errorCode = 0;
         for (addrinfo* address = addresses; address != nullptr; address = address->ai_next) {
             SocketHandle candidate = ::socket(address->ai_family, address->ai_socktype,
@@ -268,9 +304,11 @@ private:
                 continue;
             }
 
+            logInfo("Trying a resolved server address...");
             if (::connect(candidate, address->ai_addr,
                           static_cast<int>(address->ai_addrlen)) == 0) {
                 socket_ = candidate;
+                logInfo("TCP connection established to " + ip_ + ":" + service);
                 break;
             }
 
@@ -485,111 +523,86 @@ private:
 };
 
 // -----------------------------------------------------------------------------
-// Historical board snapshot adapter
+// NGS adapter boundary
 // -----------------------------------------------------------------------------
-// Call only after MAP/UPD has been fully applied to GameState. The history
-// module stores complete reconstructed boards, not sparse UPD packets.
-static void recordHistorySnapshot(
-    history::OpponentHistory& opponentHistory,
-    const GameState& state,
-    std::uint32_t& updateNumber)
-{
-    const std::size_t width = state.columns();
-    const std::size_t height = state.rows();
 
-    std::vector<history::HistoryCell> snapshotCells;
-    snapshotCells.reserve(width * height);
-
-    // HistoryCell storage is row-major: index = y * width + x.
-    for (std::size_t y = 0; y < height; ++y) {
-        for (std::size_t x = 0; x < width; ++x) {
-            const Cell& cell = state.cellAt(
-                static_cast<std::uint8_t>(x),
-                static_cast<std::uint8_t>(y));
-
-            snapshotCells.emplace_back(
-                static_cast<std::uint32_t>(cell.humans),
-                static_cast<std::uint32_t>(cell.vampires),
-                static_cast<std::uint32_t>(cell.werewolves),
-                cell.isHouse);
-        }
+static ngs::Species toNgsSpecies(Species species) {
+    switch (species) {
+        case Species::Vampires: return ngs::Species::Vampires;
+        case Species::Werewolves: return ngs::Species::Werewolves;
+        case Species::Unknown: return ngs::Species::Unknown;
     }
-
-    ++updateNumber;
-    opponentHistory.record(width, height, snapshotCells, updateNumber);
+    return ngs::Species::Unknown;
 }
 
-// -----------------------------------------------------------------------------
-// Temporary protocol-test move
-// -----------------------------------------------------------------------------
-// This is deliberately NOT an AI strategy and is not NGS. It only allows the
-// client to produce a legal one-group response while communication is tested.
-// Replace this function later with the NGS decision module.
+static ngs::BoardState toNgsBoardState(const GameState& state) {
+    ngs::BoardState board;
+    board.rows = static_cast<int>(state.rows());
+    board.columns = static_cast<int>(state.columns());
+    board.ourSpecies = toNgsSpecies(state.ourSpecies());
+    board.cells.resize(
+        static_cast<std::size_t>(board.rows) *
+        static_cast<std::size_t>(board.columns)
+    );
 
-static std::optional<Move> chooseProtocolSmokeTestMove(const GameState& state) {
-    if (state.ourSpecies() == Species::Unknown) {
-        return std::nullopt;
-    }
-
-    static constexpr std::array<std::pair<int, int>, 8> directions{{
-        {-1, -1}, {0, -1}, {1, -1},
-        {-1,  0},          {1,  0},
-        {-1,  1}, {0,  1}, {1,  1}
-    }};
-
-    int bestScore = -1000000000;
-    std::optional<Move> bestMove;
-
-    for (int y = 0; y < state.rows(); ++y) {
-        for (int x = 0; x < state.columns(); ++x) {
-            const Cell& source = state.cellAt(static_cast<std::uint8_t>(x),
-                                              static_cast<std::uint8_t>(y));
-            const std::uint8_t count = state.ourCount(source);
-            if (count == 0) continue;
-
-            for (const auto& [dx, dy] : directions) {
-                const int targetX = x + dx;
-                const int targetY = y + dy;
-                if (targetX < 0 || targetY < 0 ||
-                    targetX >= state.columns() || targetY >= state.rows()) {
-                    continue;
-                }
-
-                const Cell& target = state.cellAt(static_cast<std::uint8_t>(targetX),
-                                                  static_cast<std::uint8_t>(targetY));
-                int score = 100;
-
-                if (target.humans > 0) {
-                    score = (count >= target.humans) ? 10000 + target.humans : -500;
-                } else if (state.enemyCount(target) > 0) {
-                    const int attackers = count;
-                    const int defenders = state.enemyCount(target);
-                    if (2 * attackers >= 3 * defenders) {
-                        score = 8000 + defenders;       // certain win under the 1.5x rule
-                    } else if (2 * defenders >= 3 * attackers) {
-                        score = -10000;                 // avoid a certain loss if possible
-                    } else {
-                        score = -1000;                  // avoid a random fight if possible
-                    }
-                } else if (state.ourCount(target) > 0) {
-                    score = 1000 + state.ourCount(target); // regrouping is legal
-                }
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestMove = Move{
-                        static_cast<std::uint8_t>(x),
-                        static_cast<std::uint8_t>(y),
-                        count,
-                        static_cast<std::uint8_t>(targetX),
-                        static_cast<std::uint8_t>(targetY)
-                    };
-                }
-            }
+    for (int y = 0; y < board.rows; ++y) {
+        for (int x = 0; x < board.columns; ++x) {
+            const Cell& source = state.cellAt(
+                static_cast<std::uint8_t>(x),
+                static_cast<std::uint8_t>(y)
+            );
+            ngs::Cell& destination = board.at({x, y});
+            destination.humans = source.humans;
+            destination.vampires = source.vampires;
+            destination.werewolves = source.werewolves;
+            destination.isHouse = source.isHouse;
         }
     }
 
-    return bestMove;
+    // MAP/UPD provide cell-value snapshots, not the opponent's previous MOV.
+    // Do not invent a previous-ply source/destination footprint here.
+    board.previousPly.known = false;
+    return board;
+}
+
+static std::vector<Move> toProtocolMoves(const ngs::TurnPlan& plan) {
+    if (plan.moves.size() > 255) {
+        throw std::runtime_error("NGS returned more than 255 moves");
+    }
+
+    std::vector<Move> moves;
+    moves.reserve(plan.moves.size());
+
+    for (const ngs::Move& move : plan.moves) {
+        if (move.count == 0 || move.count > 255 ||
+            move.source.x < 0 || move.source.y < 0 ||
+            move.destination.x < 0 || move.destination.y < 0 ||
+            move.source.x > 255 || move.source.y > 255 ||
+            move.destination.x > 255 || move.destination.y > 255) {
+            throw std::runtime_error("NGS returned a movement outside MOV wire limits");
+        }
+
+        moves.push_back(Move{
+            static_cast<std::uint8_t>(move.source.x),
+            static_cast<std::uint8_t>(move.source.y),
+            static_cast<std::uint8_t>(move.count),
+            static_cast<std::uint8_t>(move.destination.x),
+            static_cast<std::uint8_t>(move.destination.y)
+        });
+    }
+
+    return moves;
+}
+
+static const char* decisionMethodName(ngs::AgentDecisionMethod method) {
+    switch (method) {
+        case ngs::AgentDecisionMethod::Search: return "search";
+        case ngs::AgentDecisionMethod::CandidateFallback: return "candidate-fallback";
+        case ngs::AgentDecisionMethod::EmergencyFallback: return "emergency-fallback";
+        case ngs::AgentDecisionMethod::NoLegalMove: return "no-legal-move";
+        case ngs::AgentDecisionMethod::InvalidInput: return "invalid-input";
+    }
+    return "unknown";
 }
 
 // -----------------------------------------------------------------------------
@@ -607,6 +620,7 @@ static bool receiveInitialState(ClientSocket& client, GameState& state) {
         if (message.command == Command::Bye) return false;
         if (message.command == Command::End) {
             // END closes the current game, even if setup was interrupted.
+            logInfo("END received during setup; clearing partial game state");
             state.clear();
             return true;
         }
@@ -621,12 +635,12 @@ static bool receiveInitialState(ClientSocket& client, GameState& state) {
 
 static void playConnection(ClientSocket& client) {
     client.sendNme("VVW-Cpp-Client");
-    std::cerr << "Registered with server as VVW-Cpp-Client\n";
+    logInfo("Waiting for initial game setup (SET, HUM, HME, MAP)");
 
     while (true) {
         GameState state;
         if (!receiveInitialState(client, state)) {
-            std::cerr << "Server sent BYE during setup\n";
+            logInfo("Server sent BYE before game setup completed; exiting");
             return;
         }
 
@@ -639,26 +653,30 @@ static void playConnection(ClientSocket& client) {
             throw std::runtime_error("Could not infer our species from HME and MAP");
         }
 
-        // One history buffer per game. Start with the complete MAP snapshot.
-        // It is destroyed automatically when this game ends.
-        history::OpponentHistory opponentHistory;
-        std::uint32_t historyUpdateNumber = 0;
-        recordHistorySnapshot(opponentHistory, state, historyUpdateNumber);
+        logInfo("Game initialized: " + std::to_string(state.rows()) + " rows x " +
+                std::to_string(state.columns()) + " columns; species=" +
+                (state.ourSpecies() == Species::Vampires ? "vampires" : "werewolves"));
+        logInfo("Waiting for game updates (UPD)");
 
-        std::cerr << "Game initialized: " << static_cast<int>(state.rows())
-                  << " rows x " << static_cast<int>(state.columns()) << " columns; species="
-                  << (state.ourSpecies() == Species::Vampires ? "vampires" : "werewolves")
-                  << "\n";
+        // One controller per game: it owns and resets opponent history at the
+        // SET/HUM/HME/MAP -> END lifecycle boundary.
+        ngs::Agent agent(toNgsSpecies(state.ourSpecies()));
+        const bool initialHistoryRecorded =
+            agent.observeInitialState(toNgsBoardState(state));
+        logInfo(initialHistoryRecorded
+            ? "NGS decision controller initialized; initial MAP snapshot recorded"
+            : "NGS decision controller initialized; initial MAP snapshot could not be recorded");
+        logInfo("Previous opponent MOV footprint is not present in UPD; cross-ply checks are skipped until supplied");
 
         while (true) {
             Message message = client.readMessage();
 
             if (message.command == Command::Bye) {
-                std::cerr << "Server sent BYE; closing client\n";
+                logInfo("Server sent BYE; closing client");
                 return;
             }
             if (message.command == Command::End) {
-                std::cerr << "Game ended; waiting for the next game\n";
+                logInfo("Game ended; waiting for the next game setup");
                 break;
             }
 
@@ -670,17 +688,21 @@ static void playConnection(ClientSocket& client) {
                 const auto receivedAt = std::chrono::steady_clock::now();
                 state.apply(message);
 
-                // UPD contains changed cell values. GameState applies those
-                // values to the persistent board; save the resulting full board.
-                recordHistorySnapshot(
-                    opponentHistory,
-                    state,
-                    historyUpdateNumber);
+                const ngs::BoardState board = toNgsBoardState(state);
+                const ngs::AgentDecision decision = agent.chooseMove(board);
+                const std::vector<Move> moves = toProtocolMoves(decision.plan);
 
-                const std::optional<Move> move = chooseProtocolSmokeTestMove(state);
-                std::vector<Move> moves;
-                if (move.has_value()) {
-                    moves.push_back(*move);
+                std::cerr << "[NGS] turn=" << decision.turnNumber
+                          << " method=" << decisionMethodName(decision.method)
+                          << " candidates=" << decision.candidatesGenerated
+                          << " root_evaluated=" << decision.rootCandidatesEvaluated
+                          << " opponent_responses=" << decision.opponentResponsesEvaluated
+                          << " history_updated=" << (decision.historyUpdated ? "yes" : "no")
+                          << " elapsed_us=" << decision.elapsedMicroseconds
+                          << "\n";
+
+                if (!decision.hasMove()) {
+                    logInfo("NGS found no legal movement; sending an empty MOV packet");
                 }
 
                 client.sendMoves(moves);
@@ -688,10 +710,8 @@ static void playConnection(ClientSocket& client) {
                 const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     sentAt - receivedAt).count();
 
-                std::cerr << "Received UPD (" << message.updates.size() << " cell updates), sent MOV ("
-                          << moves.size() << " move(s)); history snapshots "
-                          << opponentHistory.size() << "; local handling time "
-                          << elapsedMs << " ms\n";
+                std::cerr << "[TIMING] Decision and MOV-send processing=" << elapsedMs
+                          << " ms (does not include waiting for or decoding the UPD packet)\n";
                 continue;
             }
 
@@ -706,7 +726,7 @@ static void playConnection(ClientSocket& client) {
 
 static int runClient(int argc, char* argv[]) {
     if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " <server-ip> <server-port>\n";
+        std::cerr << "[USAGE] " << argv[0] << " <server-ip> <server-port>\n";
         return 2;
     }
 
@@ -721,17 +741,18 @@ static int runClient(int argc, char* argv[]) {
             throw std::invalid_argument("port contains non-numeric characters");
         }
     } catch (...) {
-        std::cerr << "Invalid server port: " << argv[argc - 1] << '\n';
+        std::cerr << "[ERROR] Invalid server port: " << argv[argc - 1] << '\n';
         return 2;
     }
 
     if (parsedPort < 1 || parsedPort > 65535) {
-        std::cerr << "Server port must be between 1 and 65535\n";
+        std::cerr << "[ERROR] Server port must be between 1 and 65535\n";
         return 2;
     }
 
+    vvw::logInfo("Starting client for remote endpoint " + ip + ":" +
+                 std::to_string(parsedPort));
     vvw::ClientSocket client(ip, static_cast<std::uint16_t>(parsedPort));
-    std::cerr << "Connected to " << ip << ':' << parsedPort << '\n';
     vvw::playConnection(client);
     return 0;
 }
@@ -745,12 +766,15 @@ int main(int argc, char* argv[]) {
     try {
 #ifdef _WIN32
         // Keep Winsock initialized for the lifetime of the socket connection.
+        vvw::logInfo("Platform: Windows");
         vvw::SocketRuntime socketRuntime;
         (void)socketRuntime;
+#else
+        vvw::logInfo("Platform: POSIX");
 #endif
         return runClient(argc, argv);
     } catch (const std::exception& error) {
-        std::cerr << "Client error: " << error.what() << '\n';
+        std::cerr << "[ERROR] " << error.what() << '\n';
         return 1;
     }
 }

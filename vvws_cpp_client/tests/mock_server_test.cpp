@@ -213,7 +213,7 @@ void runMockServer(SocketHandle listener) {
         const std::uint8_t targetY = moveBytes[4];
 
         check(sourceX == 2 && sourceY == 2, "MOV source must be the home cell (2,2)");
-        check(creatureCount == 5, "MOV must move the five creatures in the source group");
+        check(creatureCount >= 1 && creatureCount <= 5, "MOV must transfer between 1 and 5 creatures from the five-creature source group");
         const int dx = static_cast<int>(targetX) - static_cast<int>(sourceX);
         const int dy = static_cast<int>(targetY) - static_cast<int>(sourceY);
         check((dx != 0 || dy != 0) && std::abs(dx) <= 1 && std::abs(dy) <= 1,
