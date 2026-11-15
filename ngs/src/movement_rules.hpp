@@ -1,7 +1,6 @@
 
 #pragma once
-
-#include "vvw/ngs/types.hpp"
+#include "types.hpp"
 
 namespace vvw::ngs {
 
