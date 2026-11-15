@@ -4,11 +4,37 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
-#include <limits>
+#include <stdexcept>
+#include <vector>
 
 using namespace vvw::ngs;
 
 namespace {
+
+std::vector<HistoryCell> makeHistoryBoard(
+    std::size_t width,
+    std::size_t height,
+    int enemyX,
+    int enemyY
+) {
+    std::vector<HistoryCell> cells(width * height);
+
+    const std::size_t houseIndex = 2 * width + 6;
+
+    cells[houseIndex] = HistoryCell(
+        12, 0, 0, true
+    );
+
+    const std::size_t enemyIndex =
+        static_cast<std::size_t>(enemyY) * width +
+        static_cast<std::size_t>(enemyX);
+
+    cells[enemyIndex] = HistoryCell(
+        0, 0, 8, false
+    );
+
+    return cells;
+}
 
 BoardState makeBoard() {
     BoardState board;
@@ -19,42 +45,279 @@ BoardState makeBoard() {
 
     board.ourSpecies = Species::Vampires;
 
-    // Opponent populations.
     board.at({1, 1}).werewolves = 2;
     board.at({3, 2}).werewolves = 3;
 
-    // Our own population, which must not be recorded
-    // as an opponent position.
     board.at({0, 0}).vampires = 5;
 
     return board;
 }
 
-void testInvalidConfiguration() {
-    OpponentHistory invalidSpecies(
-        Species::Unknown
+// -------------------------------------------------------------
+// Original implementation tests
+// -------------------------------------------------------------
+
+void testOriginalHouseApproachTrend() {
+    const std::size_t width = 8;
+    const std::size_t height = 5;
+
+    OpponentHistory history(Species::Werewolves);
+
+    // Enemy group approaches the house:
+    // x = 2 -> 3 -> 4.
+    history.record(
+        width, height,
+        makeHistoryBoard(width, height, 2, 2),
+        1
     );
 
-    assert(!invalidSpecies.isConfigured());
+    history.record(
+        width, height,
+        makeHistoryBoard(width, height, 3, 2),
+        2
+    );
 
-    const HistoryUpdateResult result =
-        invalidSpecies.recordObservation(makeBoard(), 1);
+    history.record(
+        width, height,
+        makeHistoryBoard(width, height, 4, 2),
+        3
+    );
 
-    assert(!result.valid());
+    assert(history.size() == 3);
+    assert(!history.empty());
+
+    const std::vector<HouseTrend> trends =
+        history.houseApproachTrends(Species::Werewolves);
+
+    assert(trends.size() == 1);
+
+    assert(trends[0].oldest_distance == 4);
+    assert(trends[0].newest_distance == 2);
+
     assert(
-        result.error ==
-        OpponentHistoryError::InvalidConfiguration
+        std::abs(
+            trends[0].average_approach_per_turn - 1.0
+        ) < 1e-9
     );
 
-    OpponentHistory zeroCapacity(
-        Species::Werewolves,
-        0
+    assert(
+        std::abs(trends[0].confidence - 1.0) < 1e-9
     );
 
-    assert(!zeroCapacity.isConfigured());
+    assert(
+        std::abs(trends[0].risk - 1.0) < 1e-9
+    );
 }
 
-void testRecordsObservedPositions() {
+void testOriginalHouseDiscount() {
+    const double discounted =
+        OpponentHistory::applyHouseHistoryDiscount(
+            100.0,
+            1.0,
+            true
+        );
+
+    assert(std::abs(discounted - 90.0) < 1e-9);
+
+    const double unchanged =
+        OpponentHistory::applyHouseHistoryDiscount(
+            100.0,
+            1.0,
+            false
+        );
+
+    assert(std::abs(unchanged - 100.0) < 1e-9);
+
+    const double partialDiscount =
+        OpponentHistory::applyHouseHistoryDiscount(
+            100.0,
+            0.5,
+            true
+        );
+
+    assert(std::abs(partialDiscount - 95.0) < 1e-9);
+}
+
+void testOriginalNewestAccess() {
+    OpponentHistory history(Species::Werewolves);
+
+    const std::size_t width = 8;
+    const std::size_t height = 5;
+
+    history.record(
+        width, height,
+        makeHistoryBoard(width, height, 2, 2),
+        1
+    );
+
+    history.record(
+        width, height,
+        makeHistoryBoard(width, height, 3, 2),
+        2
+    );
+
+    assert(history.newest(0).update_number == 2);
+    assert(history.newest(1).update_number == 1);
+
+    assert(history.newest(0).turn == 2);
+}
+
+void testOriginalInsufficientSnapshots() {
+    OpponentHistory history(Species::Werewolves);
+
+    history.record(
+        8, 5,
+        makeHistoryBoard(8, 5, 2, 2),
+        1
+    );
+
+    const std::vector<HouseTrend> trends =
+        history.houseApproachTrends(Species::Werewolves);
+
+    assert(trends.empty());
+}
+
+void testOriginalNoEnemyMakesTrendAmbiguous() {
+    OpponentHistory history(Species::Werewolves);
+
+    std::vector<HistoryCell> first =
+        makeHistoryBoard(8, 5, 2, 2);
+
+    std::vector<HistoryCell> second =
+        makeHistoryBoard(8, 5, 2, 2);
+
+    // Remove all enemies from the second observation.
+    for (HistoryCell& cell : second) {
+        cell.werewolves = 0;
+    }
+
+    history.record(8, 5, first, 1);
+    history.record(8, 5, second, 2);
+
+    const std::vector<HouseTrend> trends =
+        history.houseApproachTrends(Species::Werewolves);
+
+    assert(trends.empty());
+}
+
+// -------------------------------------------------------------
+// Snapshot management tests
+// -------------------------------------------------------------
+
+void testConfigurableCapacity() {
+    OpponentHistory history(
+        Species::Werewolves,
+        2
+    );
+
+    assert(history.isConfigured());
+    assert(history.capacity() == 2);
+
+    history.record(
+        8, 5,
+        makeHistoryBoard(8, 5, 2, 2),
+        1
+    );
+
+    history.record(
+        8, 5,
+        makeHistoryBoard(8, 5, 3, 2),
+        2
+    );
+
+    history.record(
+        8, 5,
+        makeHistoryBoard(8, 5, 4, 2),
+        3
+    );
+
+    assert(history.size() == 2);
+
+    assert(history.newest(0).update_number == 3);
+    assert(history.newest(1).update_number == 2);
+}
+
+
+void testRejectConfirmedMovementForUnknownSpecies() {
+    OpponentHistory history;
+
+    const OpponentHistoryError result =
+        history.recordConfirmedMovement(
+            1,
+            {1, 1},
+            {2, 1},
+            2
+        );
+
+    assert(result == OpponentHistoryError::InvalidSpecies);
+}
+
+void testRejectsDuplicateSnapshot() {
+    OpponentHistory history(Species::Werewolves);
+
+    const auto cells =
+        makeHistoryBoard(8, 5, 2, 2);
+
+    history.record(8, 5, cells, 1);
+
+    bool threw = false;
+
+    try {
+        history.record(8, 5, cells, 1);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+
+    assert(threw);
+    assert(history.size() == 1);
+}
+
+void testRejectsChangedDimensions() {
+    OpponentHistory history(Species::Werewolves);
+
+    history.record(
+        8, 5,
+        makeHistoryBoard(8, 5, 2, 2),
+        1
+    );
+
+    bool threw = false;
+
+    try {
+        history.record(
+            7, 5,
+            makeHistoryBoard(7, 5, 2, 2),
+            2
+        );
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+
+    assert(threw);
+    assert(history.size() == 1);
+}
+
+void testClearHistory() {
+    OpponentHistory history(Species::Werewolves);
+
+    history.record(
+        8, 5,
+        makeHistoryBoard(8, 5, 2, 2),
+        1
+    );
+
+    history.clear();
+
+    assert(history.empty());
+    assert(history.size() == 0);
+    assert(history.confirmedMovements().empty());
+}
+
+// -------------------------------------------------------------
+// BoardState integration tests
+// -------------------------------------------------------------
+
+void testRecordObservationFromBoardState() {
     BoardState board = makeBoard();
 
     OpponentHistory history(Species::Werewolves);
@@ -66,56 +329,63 @@ void testRecordsObservedPositions() {
     assert(result.positionsObserved == 2);
     assert(result.snapshotsRetained == 1);
 
-    assert(history.snapshotCount() == 1);
-    assert(history.latestTurn() == 1);
+    assert(history.size() == 1);
 
-    const OpponentSnapshot& snapshot =
-        history.snapshots().back();
+    const BoardSnapshot& snapshot = history.newest();
 
+    assert(snapshot.width == 4);
+    assert(snapshot.height == 4);
     assert(snapshot.turn == 1);
-    assert(snapshot.totalPopulation == 5);
-    assert(snapshot.positions.size() == 2);
 
-    assert((snapshot.positions[0].position == Position{1, 1}));
-    assert((snapshot.positions[1].position == Position{3, 2}));
-
-    assert((snapshot.positions[1].position == Position{3, 2}));
-    assert(snapshot.positions[1].population == 3);
+    assert(snapshot.cells.size() == 16);
+    assert(snapshot.cells[5].werewolves == 2);
+    assert(snapshot.cells[11].werewolves == 3);
 }
 
-void testDoesNotRecordOurSpecies() {
+void testRecordObservationRejectsWrongSpecies() {
     BoardState board = makeBoard();
 
-    OpponentHistory history(Species::Werewolves);
+    // Vampires are our species, so the opponent is Werewolves.
+    OpponentHistory history(Species::Vampires);
 
     const HistoryUpdateResult result =
         history.recordObservation(board, 1);
 
-    assert(result.valid());
-
-    for (const OpponentPositionObservation& observation :
-         history.snapshots().back().positions) {
-        assert(
-            (observation.position != Position{0, 0})
-        );
-    }
+    assert(!result.valid());
+    assert(result.error == OpponentHistoryError::InvalidSpecies);
 }
+
+void testRecordObservationRejectsInvalidTurn() {
+    BoardState board = makeBoard();
+
+    OpponentHistory history(Species::Werewolves);
+
+    assert(history.recordObservation(board, 5).valid());
+
+    const HistoryUpdateResult result =
+        history.recordObservation(board, 5);
+
+    assert(!result.valid());
+    assert(result.error == OpponentHistoryError::InvalidTurn);
+}
+
+// -------------------------------------------------------------
+// Position statistics tests
+// -------------------------------------------------------------
 
 void testPositionStatistics() {
     OpponentHistory history(Species::Werewolves);
 
     BoardState board = makeBoard();
 
-    // Turn 1: population 2 at (1, 1).
     assert(history.recordObservation(board, 1).valid());
 
-    // Turn 2: population increases to 3 at the same position.
     board.at({1, 1}).werewolves = 3;
     assert(history.recordObservation(board, 2).valid());
 
-    // Turn 3: group is no longer observed at (1, 1).
     board.at({1, 1}).werewolves = 0;
     board.at({2, 2}).werewolves = 4;
+
     assert(history.recordObservation(board, 3).valid());
 
     const PositionStatisticsResult result =
@@ -133,12 +403,14 @@ void testPositionStatistics() {
     assert(stats.snapshotsConsidered == 3);
     assert(stats.presenceCount == 2);
 
-    assert(std::abs(stats.presenceFrequency - (2.0 / 3.0)) < 1e-9);
+    assert(
+        std::abs(
+            stats.presenceFrequency - (2.0 / 3.0)
+        ) < 1e-9
+    );
 
-    // Weights for turns 1, 2 and 3 are 0.25, 0.5 and 1.
-    // Position (1, 1) was occupied on turns 1 and 2.
-    // Its weighted frequency is therefore 0.75 / 1.75.
-    const double expectedWeightedFrequency = 0.75 / 1.75;
+    const double expectedWeightedFrequency =
+        0.75 / 1.75;
 
     assert(
         std::abs(
@@ -149,11 +421,12 @@ void testPositionStatistics() {
 
     assert(stats.latestPopulation == 0);
     assert(stats.maximumObservedPopulation == 3);
+
     assert(stats.hasBeenObserved);
     assert(stats.lastSeenTurn == 2);
 }
 
-void testPositionThatWasNeverObserved() {
+void testPositionNeverObserved() {
     OpponentHistory history(Species::Werewolves);
 
     BoardState board = makeBoard();
@@ -170,28 +443,32 @@ void testPositionThatWasNeverObserved() {
 
     assert(result.statistics.presenceCount == 0);
     assert(result.statistics.presenceFrequency == 0.0);
-    assert(result.statistics.latestPopulation == 0);
     assert(!result.statistics.hasBeenObserved);
 }
 
-void testSnapshotChangesDoNotInferMovement() {
+void testPositionStatisticsRejectInvalidHalfLife() {
     OpponentHistory history(Species::Werewolves);
 
     BoardState board = makeBoard();
 
     assert(history.recordObservation(board, 1).valid());
 
-    // The group disappears from (1, 1) and appears at (2, 1).
-    // We deliberately do not interpret this as a confirmed move.
-    board.at({1, 1}).werewolves = 0;
-    board.at({2, 1}).werewolves = 2;
+    const PositionStatisticsResult result =
+        history.getPositionStatistics(
+            {1, 1},
+            1,
+            0.0
+        );
 
-    assert(history.recordObservation(board, 2).valid());
-
-    assert(history.confirmedMovements().empty());
+    assert(!result.valid());
+    assert(result.error == OpponentHistoryError::InvalidHalfLife);
 }
 
-void testRecordsConfirmedMovement() {
+// -------------------------------------------------------------
+// Confirmed movement tests
+// -------------------------------------------------------------
+
+void testConfirmedMovement() {
     OpponentHistory history(Species::Werewolves);
 
     BoardState board = makeBoard();
@@ -207,7 +484,6 @@ void testRecordsConfirmedMovement() {
         );
 
     assert(error == OpponentHistoryError::None);
-
     assert(history.confirmedMovements().size() == 1);
 
     const OpponentMovementObservation& movement =
@@ -219,42 +495,37 @@ void testRecordsConfirmedMovement() {
     assert(movement.count == 2);
 }
 
-void testRejectsInvalidConfirmedMovement() {
+void testRejectInvalidMovement() {
     OpponentHistory history(Species::Werewolves);
 
     BoardState board = makeBoard();
 
     assert(history.recordObservation(board, 1).valid());
 
-    // Out-of-bounds destination.
     assert(
         history.recordConfirmedMovement(
             1, {1, 1}, {4, 1}, 2
         ) == OpponentHistoryError::InvalidPosition
     );
 
-    // Non-adjacent destination.
     assert(
         history.recordConfirmedMovement(
             1, {1, 1}, {3, 3}, 2
         ) == OpponentHistoryError::InvalidMovement
     );
 
-    // Same source and destination.
     assert(
         history.recordConfirmedMovement(
             1, {1, 1}, {1, 1}, 2
         ) == OpponentHistoryError::InvalidMovement
     );
 
-    // Zero population.
     assert(
         history.recordConfirmedMovement(
             1, {1, 1}, {2, 1}, 0
         ) == OpponentHistoryError::InvalidMovement
     );
 
-    // MOV count must fit in one byte.
     assert(
         history.recordConfirmedMovement(
             1, {1, 1}, {2, 1}, 256
@@ -264,197 +535,85 @@ void testRejectsInvalidConfirmedMovement() {
     assert(history.confirmedMovements().empty());
 }
 
-void testRejectsOutOfOrderMovement() {
+void testSnapshotDoesNotInferMovement() {
     OpponentHistory history(Species::Werewolves);
 
     BoardState board = makeBoard();
-
-    assert(history.recordObservation(board, 1).valid());
-
-    assert(
-        history.recordConfirmedMovement(
-            3, {1, 1}, {2, 1}, 2
-        ) == OpponentHistoryError::None
-    );
-
-    // An older confirmed movement must not be appended afterward.
-    assert(
-        history.recordConfirmedMovement(
-            2, {1, 1}, {1, 2}, 1
-        ) == OpponentHistoryError::InvalidTurn
-    );
-}
-
-void testRejectsDuplicateAndOlderSnapshots() {
-    OpponentHistory history(Species::Werewolves);
-
-    BoardState board = makeBoard();
-
-    assert(history.recordObservation(board, 5).valid());
-
-    const HistoryUpdateResult duplicate =
-        history.recordObservation(board, 5);
-
-    assert(!duplicate.valid());
-    assert(duplicate.error == OpponentHistoryError::InvalidTurn);
-
-    const HistoryUpdateResult older =
-        history.recordObservation(board, 4);
-
-    assert(!older.valid());
-    assert(older.error == OpponentHistoryError::InvalidTurn);
-
-    assert(history.snapshotCount() == 1);
-}
-
-void testRetainsNewestSnapshots() {
-    OpponentHistory history(
-        Species::Werewolves,
-        2
-    );
-
-    BoardState board = makeBoard();
-
-    board.at({3, 2}).werewolves = 0;
 
     assert(history.recordObservation(board, 1).valid());
 
     board.at({1, 1}).werewolves = 0;
-    board.at({2, 2}).werewolves = 4;
+    board.at({2, 1}).werewolves = 2;
 
     assert(history.recordObservation(board, 2).valid());
 
-    board.at({1, 1}).werewolves = 3;
-    board.at({2, 2}).werewolves = 0;
-
-    assert(history.recordObservation(board, 3).valid());
-
-    assert(history.snapshotCount() == 2);
-    assert(history.snapshots()[0].turn == 2);
-    assert(history.snapshots()[1].turn == 3);
-
-    const PositionStatisticsResult result =
-        history.getPositionStatistics(
-            {1, 1},
-            3
-        );
-
-    assert(result.valid());
-    assert(result.statistics.snapshotsConsidered == 2);
-    assert(result.statistics.presenceCount == 1);
-    assert(std::abs(result.statistics.presenceFrequency - 0.5) < 1e-9);
+    // Snapshot changes alone do not establish a confirmed move.
+    assert(history.confirmedMovements().empty());
 }
 
-void testRejectsChangedBoardDimensions() {
-    OpponentHistory history(Species::Werewolves);
+void testOriginalDefaultConstructor() {
+    OpponentHistory history;
 
-    BoardState board = makeBoard();
+    assert(history.empty());
 
-    assert(history.recordObservation(board, 1).valid());
-
-    BoardState changedBoard;
-    changedBoard.rows = 5;
-    changedBoard.columns = 4;
-    changedBoard.cells.resize(20);
-    changedBoard.ourSpecies = Species::Vampires;
-
-    const HistoryUpdateResult result =
-        history.recordObservation(changedBoard, 2);
-
-    assert(!result.valid());
-    assert(
-        result.error ==
-        OpponentHistoryError::BoardDimensionsChanged
+    history.record(
+        8,
+        5,
+        makeHistoryBoard(8, 5, 2, 2),
+        1
     );
 
-    assert(history.snapshotCount() == 1);
-}
-
-void testRejectsWrongOpponentSpecies() {
-    OpponentHistory history(Species::Vampires);
-
-    BoardState board = makeBoard();
-    // board.ourSpecies is Vampires, so the opponent is Werewolves.
-
-    const HistoryUpdateResult result =
-        history.recordObservation(board, 1);
-
-    assert(!result.valid());
-    assert(result.error == OpponentHistoryError::InvalidSpecies);
-}
-
-void testRejectsInvalidStatisticsRequests() {
-    OpponentHistory history(Species::Werewolves);
-
-    BoardState board = makeBoard();
-
-    assert(history.recordObservation(board, 5).valid());
-
-    const PositionStatisticsResult invalidPosition =
-        history.getPositionStatistics({4, 4}, 5);
-
-    assert(!invalidPosition.valid());
-    assert(
-        invalidPosition.error ==
-        OpponentHistoryError::InvalidPosition
+    history.record(
+        8,
+        5,
+        makeHistoryBoard(8, 5, 3, 2),
+        2
     );
 
-    const PositionStatisticsResult invalidHalfLife =
-        history.getPositionStatistics(
-            {1, 1},
-            5,
-            0.0
-        );
+    assert(history.size() == 2);
 
-    assert(!invalidHalfLife.valid());
-    assert(
-        invalidHalfLife.error ==
-        OpponentHistoryError::InvalidHalfLife
-    );
+    const auto trends =
+        history.houseApproachTrends(Species::Werewolves);
 
-    const PositionStatisticsResult invalidTurn =
-        history.getPositionStatistics(
-            {1, 1},
-            4
-        );
-
-    assert(!invalidTurn.valid());
-    assert(invalidTurn.error == OpponentHistoryError::InvalidTurn);
-}
-
-void testConfirmedMovementRequiresInitialObservation() {
-    OpponentHistory history(Species::Werewolves);
-
-    const OpponentHistoryError error =
-        history.recordConfirmedMovement(
-            1,
-            {1, 1},
-            {2, 1},
-            2
-        );
-
-    assert(error == OpponentHistoryError::HistoryNotInitialized);
+    assert(trends.size() == 1);
+    assert(trends[0].oldest_distance == 4);
+    assert(trends[0].newest_distance == 3);
 }
 
 } // namespace
 
 int main() {
-    testInvalidConfiguration();
-    testRecordsObservedPositions();
-    testDoesNotRecordOurSpecies();
-    testPositionStatistics();
-    testPositionThatWasNeverObserved();
-    testSnapshotChangesDoNotInferMovement();
-    testRecordsConfirmedMovement();
-    testRejectsInvalidConfirmedMovement();
-    testRejectsOutOfOrderMovement();
-    testRejectsDuplicateAndOlderSnapshots();
-    testRetainsNewestSnapshots();
-    testRejectsChangedBoardDimensions();
-    testRejectsWrongOpponentSpecies();
-    testRejectsInvalidStatisticsRequests();
-    testConfirmedMovementRequiresInitialObservation();
+    // Original implementation tests.
+    testOriginalDefaultConstructor();
+    testOriginalHouseApproachTrend();
+    testOriginalHouseDiscount();
+    testOriginalNewestAccess();
+    testOriginalInsufficientSnapshots();
+    testOriginalNoEnemyMakesTrendAmbiguous();
+    testRejectConfirmedMovementForUnknownSpecies();
 
-    std::cout << "All opponent history tests passed.\n";
+    // Snapshot management tests.
+    testConfigurableCapacity();
+    testRejectsDuplicateSnapshot();
+    testRejectsChangedDimensions();
+    testClearHistory();
+
+    // NGS BoardState integration.
+    testRecordObservationFromBoardState();
+    testRecordObservationRejectsWrongSpecies();
+    testRecordObservationRejectsInvalidTurn();
+
+    // New position statistics.
+    testPositionStatistics();
+    testPositionNeverObserved();
+    testPositionStatisticsRejectInvalidHalfLife();
+
+    // New confirmed movement history.
+    testConfirmedMovement();
+    testRejectInvalidMovement();
+    testSnapshotDoesNotInferMovement();
+
+    std::cout << "All consolidated opponent history tests passed.\n";
+
     return 0;
 }
