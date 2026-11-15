@@ -1,3 +1,131 @@
+#ifndef VVWS_NGS_OPPONENT_HISTORY_HPP
+#define VVWS_NGS_OPPONENT_HISTORY_HPP
+
+// Lightweight history of reconstructed board states.
+// Header-only: no additional CMake source entry is required.
+// C++11-compatible; uses only the C++ standard library.
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <stdexcept>
+#include <utility>
+#include <vector>
+
+namespace vvw {
+namespace history {
+
+enum class Species {
+    Vampires,
+    Werewolves
+};
+
+// Copy the values needed by history from one cell in the live game state.
+// Keep population fields wide until the server's maximum per-cell population
+// is confirmed; uint32_t avoids silently truncating a large population.
+struct HistoryCell {
+    std::uint32_t humans;
+    std::uint32_t vampires;
+    std::uint32_t werewolves;
+    bool is_house;
+
+    HistoryCell()
+        : humans(0), vampires(0), werewolves(0), is_house(false) {}
+
+    HistoryCell(std::uint32_t h,
+                std::uint32_t v,
+                std::uint32_t w,
+                bool house)
+        : humans(h), vampires(v), werewolves(w), is_house(house) {}
+};
+
+struct HouseTrend {
+    std::size_t cell_index;
+    int oldest_distance;
+    int newest_distance;
+    double average_approach_per_turn; // Cells of Chebyshev distance closed per update.
+    double confidence;                // 0..1: fraction of transitions showing approach.
+    double risk;                      // 0..1: bounded approach strength * confidence.
+
+    HouseTrend()
+        : cell_index(0), oldest_distance(-1), newest_distance(-1),
+          average_approach_per_turn(0.0), confidence(0.0), risk(0.0) {}
+};
+
+struct BoardSnapshot {
+    std::size_t width;
+    std::size_t height;
+    std::uint32_t update_number;
+    std::vector<HistoryCell> cells;
+
+    BoardSnapshot() : width(0), height(0), update_number(0), cells() {}
+};
+
+class OpponentHistory {
+public:
+    static const std::size_t kCapacity = 4;
+
+    OpponentHistory() : next_write_(0), count_(0) {}
+
+    void clear() {
+        for (std::size_t i = 0; i < kCapacity; ++i) {
+            slots_[i] = BoardSnapshot();
+        }
+        next_write_ = 0;
+        count_ = 0;
+    }
+
+    // Record a FULL reconstructed board after MAP or UPD has been applied.
+    // The vector must contain width*height cells in row-major order:
+    // index = y*width + x.
+    void record(std::size_t width,
+                std::size_t height,
+                const std::vector<HistoryCell>& cells,
+                std::uint32_t update_number) {
+        if (width == 0 || height == 0 || cells.size() != width * height) {
+            throw std::invalid_argument("OpponentHistory: invalid board dimensions/cell count");
+        }
+
+        BoardSnapshot snapshot;
+        snapshot.width = width;
+        snapshot.height = height;
+        snapshot.update_number = update_number;
+        snapshot.cells = cells;
+
+        slots_[next_write_] = snapshot;
+        next_write_ = (next_write_ + 1) % kCapacity;
+        if (count_ < kCapacity) {
+            ++count_;
+        }
+    }
+
+    std::size_t size() const { return count_; }
+    bool empty() const { return count_ == 0; }
+
+    // age=0 is newest, age=1 is the snapshot immediately before it, etc.
+    const BoardSnapshot& newest(std::size_t age = 0) const {
+        if (age >= count_) {
+            throw std::out_of_range("OpponentHistory: requested snapshot is not available");
+        }
+        const std::size_t index = (next_write_ + kCapacity - 1 - age) % kCapacity;
+        return slots_[index];
+    }
+
+    // Estimate whether the nearest enemy force has been approaching each
+    // currently active human house. This intentionally tracks regional
+    // pressure, not the identity or exact path of an individual enemy group.
+    // Need at least two snapshots. Returns one trend per active house.
+    std::vector<HouseTrend> houseApproachTrends(Species opponent) const {
+        std::vector<HouseTrend> result;
+        if (count_ < 2) {
+            return result;
+        }
+
+        const BoardSnapshot& current = newest(0);
+        std::vector< std::vector<Position> > enemy_positions;
+        enemy_positions.reserve(count_);
+
         // Gather enemy positions once per snapshot. This avoids rescanning
         // every board cell for every house.
         for (std::size_t chronological = 0; chronological < count_; ++chronological) {
