@@ -12,7 +12,9 @@
 #include <utility>
 #include <vector>
 
-#include "../ngs/src/agent.hpp"
+#include "vvw/game/decision_engine_factory.hpp"
+
+#include <memory>
 
 #ifdef _WIN32
     #ifndef NOMINMAX
@@ -523,23 +525,33 @@ private:
 };
 
 // -----------------------------------------------------------------------------
-// NGS adapter boundary
+// Generic decision-engine adapter boundary
 // -----------------------------------------------------------------------------
+// The TCP client knows only the shared game types and DecisionEngine interface.
+// It does not include NGS or Expectiminimax headers. Each executable links one
+// implementation of makeDecisionEngine() through its own adapter.
 
-static ngs::Species toNgsSpecies(Species species) {
+static vvw::game::Species toGameSpecies(Species species) {
     switch (species) {
-        case Species::Vampires: return ngs::Species::Vampires;
-        case Species::Werewolves: return ngs::Species::Werewolves;
-        case Species::Unknown: return ngs::Species::Unknown;
+        case Species::Vampires:
+            return vvw::game::Species::Vampires;
+        case Species::Werewolves:
+            return vvw::game::Species::Werewolves;
+        case Species::Unknown:
+            return vvw::game::Species::Unknown;
     }
-    return ngs::Species::Unknown;
+    return vvw::game::Species::Unknown;
 }
 
-static ngs::BoardState toNgsBoardState(const GameState& state) {
-    ngs::BoardState board;
+static vvw::game::BoardState toGameBoardState(const GameState& state) {
+    if (state.rows() == 0 || state.columns() == 0) {
+        throw std::runtime_error("Cannot convert an uninitialized game board");
+    }
+
+    vvw::game::BoardState board;
     board.rows = static_cast<int>(state.rows());
     board.columns = static_cast<int>(state.columns());
-    board.ourSpecies = toNgsSpecies(state.ourSpecies());
+    board.ourSpecies = toGameSpecies(state.ourSpecies());
     board.cells.resize(
         static_cast<std::size_t>(board.rows) *
         static_cast<std::size_t>(board.columns)
@@ -551,7 +563,10 @@ static ngs::BoardState toNgsBoardState(const GameState& state) {
                 static_cast<std::uint8_t>(x),
                 static_cast<std::uint8_t>(y)
             );
-            ngs::Cell& destination = board.at({x, y});
+
+            vvw::game::Cell& destination = board.at(
+                vvw::game::Position{x, y}
+            );
             destination.humans = source.humans;
             destination.vampires = source.vampires;
             destination.werewolves = source.werewolves;
@@ -559,27 +574,44 @@ static ngs::BoardState toNgsBoardState(const GameState& state) {
         }
     }
 
-    // MAP/UPD provide cell-value snapshots, not the opponent's previous MOV.
-    // Do not invent a previous-ply source/destination footprint here.
+    // The server's MAP/UPD records provide cell values, not the previous
+    // player's MOV source/destination footprint. Never infer that footprint
+    // from sparse cell changes.
     board.previousPly.known = false;
     return board;
 }
 
-static std::vector<Move> toProtocolMoves(const ngs::TurnPlan& plan) {
+static std::vector<Move> toProtocolMoves(
+    const vvw::game::TurnPlan& plan,
+    const GameState& state
+) {
     if (plan.moves.size() > 255) {
-        throw std::runtime_error("NGS returned more than 255 moves");
+        throw std::runtime_error(
+            "Decision engine returned more than 255 moves; MOV count is one byte"
+        );
     }
 
     std::vector<Move> moves;
     moves.reserve(plan.moves.size());
 
-    for (const ngs::Move& move : plan.moves) {
-        if (move.count == 0 || move.count > 255 ||
-            move.source.x < 0 || move.source.y < 0 ||
+    for (std::size_t i = 0; i < plan.moves.size(); ++i) {
+        const vvw::game::Move& move = plan.moves[i];
+
+        if (move.count == 0 || move.count > 255) {
+            throw std::runtime_error(
+                "Decision engine returned a movement count outside MOV wire limits"
+            );
+        }
+
+        if (move.source.x < 0 || move.source.y < 0 ||
             move.destination.x < 0 || move.destination.y < 0 ||
-            move.source.x > 255 || move.source.y > 255 ||
-            move.destination.x > 255 || move.destination.y > 255) {
-            throw std::runtime_error("NGS returned a movement outside MOV wire limits");
+            move.source.x >= static_cast<int>(state.columns()) ||
+            move.destination.x >= static_cast<int>(state.columns()) ||
+            move.source.y >= static_cast<int>(state.rows()) ||
+            move.destination.y >= static_cast<int>(state.rows())) {
+            throw std::runtime_error(
+                "Decision engine returned a source or destination outside the board/wire range"
+            );
         }
 
         moves.push_back(Move{
@@ -592,17 +624,6 @@ static std::vector<Move> toProtocolMoves(const ngs::TurnPlan& plan) {
     }
 
     return moves;
-}
-
-static const char* decisionMethodName(ngs::AgentDecisionMethod method) {
-    switch (method) {
-        case ngs::AgentDecisionMethod::Search: return "search";
-        case ngs::AgentDecisionMethod::CandidateFallback: return "candidate-fallback";
-        case ngs::AgentDecisionMethod::EmergencyFallback: return "emergency-fallback";
-        case ngs::AgentDecisionMethod::NoLegalMove: return "no-legal-move";
-        case ngs::AgentDecisionMethod::InvalidInput: return "invalid-input";
-    }
-    return "unknown";
 }
 
 // -----------------------------------------------------------------------------
@@ -658,15 +679,24 @@ static void playConnection(ClientSocket& client) {
                 (state.ourSpecies() == Species::Vampires ? "vampires" : "werewolves"));
         logInfo("Waiting for game updates (UPD)");
 
-        // One controller per game: it owns and resets opponent history at the
-        // SET/HUM/HME/MAP -> END lifecycle boundary.
-        ngs::Agent agent(toNgsSpecies(state.ourSpecies()));
-        const bool initialHistoryRecorded =
-            agent.observeInitialState(toNgsBoardState(state));
-        logInfo(initialHistoryRecorded
-            ? "NGS decision controller initialized; initial MAP snapshot recorded"
-            : "NGS decision controller initialized; initial MAP snapshot could not be recorded");
-        logInfo("Previous opponent MOV footprint is not present in UPD; cross-ply checks are skipped until supplied");
+        // One decision engine per game. Its implementation is selected at link
+        // time: the NGS executable links the NGS factory, while the Expectiminimax
+        // executable links the Expectiminimax factory. The engine is destroyed
+        // automatically when this game ends or the connection exits.
+        std::unique_ptr<vvw::game::DecisionEngine> engine =
+            vvw::game::makeDecisionEngine(toGameSpecies(state.ourSpecies()));
+
+        if (!engine) {
+            throw std::runtime_error("Decision-engine factory returned null");
+        }
+
+        const vvw::game::BoardState initialBoard = toGameBoardState(state);
+        if (!engine->onGameStart(initialBoard)) {
+            throw std::runtime_error("Selected decision engine rejected the initial board");
+        }
+
+        logInfo("Decision engine initialized; initial MAP board supplied");
+        logInfo("Previous opponent MOV footprint is not present in UPD; the client marks it unknown");
 
         while (true) {
             Message message = client.readMessage();
@@ -688,23 +718,15 @@ static void playConnection(ClientSocket& client) {
                 const auto receivedAt = std::chrono::steady_clock::now();
                 state.apply(message);
 
-                const ngs::BoardState board = toNgsBoardState(state);
-                const ngs::AgentDecision decision = agent.chooseMove(board);
-                const std::vector<Move> moves = toProtocolMoves(decision.plan);
+                const vvw::game::BoardState board = toGameBoardState(state);
+                const vvw::game::TurnPlan plan = engine->chooseMove(board);
+                const std::vector<Move> moves = toProtocolMoves(plan, state);
 
-                std::cerr << "[NGS] turn=" << decision.turnNumber
-                          << " method=" << decisionMethodName(decision.method)
-                          << " candidates=" << decision.candidatesGenerated
-                          << " root_evaluated=" << decision.rootCandidatesEvaluated
-                          << " opponent_responses=" << decision.opponentResponsesEvaluated
-                          << " history_updated=" << (decision.historyUpdated ? "yes" : "no")
-                          << " elapsed_us=" << decision.elapsedMicroseconds
-                          << "\n";
-
-                if (!decision.hasMove()) {
-                    logInfo("NGS found no legal movement; sending an empty MOV packet");
+                if (plan.moves.empty()) {
+                    logInfo("Decision engine returned no move; sending an empty MOV packet");
                 }
-
+                logInfo("Decision engine produced " + std::to_string(moves.size()) +
+                        " move(s)");
                 client.sendMoves(moves);
                 const auto sentAt = std::chrono::steady_clock::now();
                 const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(

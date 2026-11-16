@@ -1,9 +1,23 @@
 cmake_minimum_required(VERSION 3.16)
-project(vvws_client LANGUAGES CXX)
+project(vvws_cpp_client LANGUAGES CXX)
 
-# NGS is a standalone decision library. It contains no socket or protocol code.
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# The repository keeps common/, ngs/, and vvws_cpp_client/ as siblings.
+set(VVW_COMMON_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../common/include")
+set(VVW_NGS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ngs/src")
+set(VVW_NGS_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ngs/include")
+
+# -----------------------------------------------------------------------------
+# NGS decision engine library
+# -----------------------------------------------------------------------------
+# The adapter is part of this library and supplies the implementation of
+# vvw::game::makeDecisionEngine() for this NGS-backed executable.
 add_library(vvws_ngs STATIC
     ../ngs/src/agent.cpp
+    ../ngs/src/ngs_decision_engine.cpp
     ../ngs/src/movement_rules.cpp
     ../ngs/src/transition_engine.cpp
     ../ngs/src/evaluation.cpp
@@ -14,92 +28,146 @@ add_library(vvws_ngs STATIC
     ../ngs/src/opponent_predictor.cpp
     ../ngs/src/opponent_search.cpp
 )
+
 target_compile_features(vvws_ngs PUBLIC cxx_std_17)
 target_include_directories(vvws_ngs PUBLIC
-    ../ngs/include
-    ../ngs/src
+    "${VVW_COMMON_INCLUDE_DIR}"
+    "${VVW_NGS_SOURCE_DIR}"
+    "${VVW_NGS_INCLUDE_DIR}"
 )
 
-add_executable(vvws_client client.cpp)
+# -----------------------------------------------------------------------------
+# Single executable for now: shared TCP client + NGS decision engine
+# -----------------------------------------------------------------------------
+add_executable(vvws_client
+    client.cpp
+)
 target_compile_features(vvws_client PRIVATE cxx_std_17)
-target_include_directories(vvws_client PRIVATE ../ngs/src)
 target_link_libraries(vvws_client PRIVATE vvws_ngs)
 set_target_properties(vvws_client PROPERTIES OUTPUT_NAME "vvws_client")
 
 if(WIN32)
-    # Winsock 2 is part of Windows; no professor-provided DLL is linked here.
     target_link_libraries(vvws_client PRIVATE ws2_32)
     target_compile_definitions(vvws_client PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 endif()
 
-if(MSVC)
-    target_compile_options(vvws_ngs PRIVATE /W4 /permissive-)
-    target_compile_options(vvws_client PRIVATE /W4 /permissive-)
-else()
-    target_compile_options(vvws_ngs PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(vvws_client PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+# Apply consistent warnings to production targets.
+function(vvw_enable_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
 
-# Keep MinGW-built executables self-contained with respect to the GNU C++ runtime.
+vvw_enable_warnings(vvws_ngs)
+vvw_enable_warnings(vvws_client)
+
+# Keep MinGW-built Windows executables self-contained with respect to the GNU
+# C++ runtime. This affects executable targets, not the static NGS archive.
 if(MINGW)
     target_link_options(vvws_client PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
 
+# -----------------------------------------------------------------------------
+# Tests
+# -----------------------------------------------------------------------------
 include(CTest)
+
 if(BUILD_TESTING)
-    # Existing opponent-history unit tests now link the compiled NGS library.
-    add_executable(
-        vvws_opponent_history_test
+    # The common interface is tested without linking any algorithm.
+    add_executable(vvws_decision_engine_contract_test
+        ../common/tests/decision_engine_test.cpp
+    )
+    target_include_directories(vvws_decision_engine_contract_test PRIVATE
+        "${VVW_COMMON_INCLUDE_DIR}"
+    )
+    target_compile_features(vvws_decision_engine_contract_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_decision_engine_contract_test)
+
+    # Existing NGS history test.
+    add_executable(vvws_opponent_history_test
         ../ngs/tests/opponent_history_test.cpp
     )
-    target_compile_features(vvws_opponent_history_test PRIVATE cxx_std_17)
-    target_include_directories(vvws_opponent_history_test PRIVATE
-        ../ngs/include ../ngs/src
-    )
     target_link_libraries(vvws_opponent_history_test PRIVATE vvws_ngs)
+    target_compile_features(vvws_opponent_history_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_opponent_history_test)
 
-    add_executable(
-        vvws_agent_test
+    # Existing NGS orchestration test.
+    add_executable(vvws_agent_test
         ../ngs/tests/agent_test.cpp
     )
-    target_compile_features(vvws_agent_test PRIVATE cxx_std_17)
-    target_include_directories(vvws_agent_test PRIVATE
-        ../ngs/include ../ngs/src
-    )
     target_link_libraries(vvws_agent_test PRIVATE vvws_ngs)
+    target_compile_features(vvws_agent_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_agent_test)
 
-    if(MSVC)
-        target_compile_options(vvws_opponent_history_test PRIVATE /W4 /permissive- /UNDEBUG)
-        target_compile_options(vvws_agent_test PRIVATE /W4 /permissive- /UNDEBUG)
-    else()
-        # The tests use assert(); keep assertions enabled in Release builds.
-        target_compile_options(vvws_opponent_history_test PRIVATE -Wall -Wextra -Wpedantic -UNDEBUG)
-        target_compile_options(vvws_agent_test PRIVATE -Wall -Wextra -Wpedantic -UNDEBUG)
-    endif()
+    # New test: NGS is usable through the shared DecisionEngine interface.
+    add_executable(vvws_ngs_decision_engine_test
+        ../ngs/tests/ngs_decision_engine_test.cpp
+    )
+    target_link_libraries(vvws_ngs_decision_engine_test PRIVATE vvws_ngs)
+    target_compile_features(vvws_ngs_decision_engine_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_ngs_decision_engine_test)
 
-    add_test(NAME opponent_history_unit COMMAND vvws_opponent_history_test)
-    add_test(NAME agent_orchestration_unit COMMAND vvws_agent_test)
-    set_tests_properties(opponent_history_unit agent_orchestration_unit PROPERTIES TIMEOUT 20)
+    # Assertions must remain active in Release builds for these unit tests.
+    foreach(test_target IN ITEMS
+        vvws_decision_engine_contract_test
+        vvws_opponent_history_test
+        vvws_agent_test
+        vvws_ngs_decision_engine_test
+    )
+        if(MSVC)
+            target_compile_options(${test_target} PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(${test_target} PRIVATE -UNDEBUG)
+        endif()
+    endforeach()
 
-    # C++ integration test: starts a local mock TCP server and launches vvws_client.
+    add_test(
+        NAME decision_engine_contract_unit
+        COMMAND vvws_decision_engine_contract_test
+    )
+    add_test(
+        NAME opponent_history_unit
+        COMMAND vvws_opponent_history_test
+    )
+    add_test(
+        NAME agent_orchestration_unit
+        COMMAND vvws_agent_test
+    )
+    add_test(
+        NAME ngs_decision_engine_unit
+        COMMAND vvws_ngs_decision_engine_test
+    )
+
+    set_tests_properties(
+        decision_engine_contract_unit
+        opponent_history_unit
+        agent_orchestration_unit
+        ngs_decision_engine_unit
+        PROPERTIES TIMEOUT 30
+    )
+
+    # Local mock TCP server integration test. It launches the production client.
     find_package(Threads REQUIRED)
-    add_executable(vvws_cpp_mock_server_test tests/mock_server_test.cpp)
+    add_executable(vvws_cpp_mock_server_test
+        tests/mock_server_test.cpp
+    )
     target_compile_features(vvws_cpp_mock_server_test PRIVATE cxx_std_17)
     target_link_libraries(vvws_cpp_mock_server_test PRIVATE Threads::Threads)
+    vvw_enable_warnings(vvws_cpp_mock_server_test)
 
     if(WIN32)
         target_link_libraries(vvws_cpp_mock_server_test PRIVATE ws2_32)
-        target_compile_definitions(vvws_cpp_mock_server_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-    endif()
-
-    if(MSVC)
-        target_compile_options(vvws_cpp_mock_server_test PRIVATE /W4 /permissive-)
-    else()
-        target_compile_options(vvws_cpp_mock_server_test PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_definitions(vvws_cpp_mock_server_test PRIVATE
+            WIN32_LEAN_AND_MEAN NOMINMAX
+        )
     endif()
 
     if(MINGW)
-        target_link_options(vvws_cpp_mock_server_test PRIVATE -static -static-libgcc -static-libstdc++)
+        target_link_options(vvws_cpp_mock_server_test PRIVATE
+            -static -static-libgcc -static-libstdc++
+        )
     endif()
 
     add_test(
