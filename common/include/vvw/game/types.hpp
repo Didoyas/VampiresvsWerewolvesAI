@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstddef>
 #include <stdexcept>
 #include <vector>
 
@@ -154,4 +155,4 @@ struct BoardState {
     }
 };
 
-} // namespace vvw::name
+} // namespace vvw::game

@@ -18,6 +18,7 @@ set(VVW_NGS_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ngs/include")
 add_library(vvws_ngs STATIC
     ../ngs/src/agent.cpp
     ../ngs/src/ngs_decision_engine.cpp
+    ../ngs/src/decision_engine_factory.cpp
     ../ngs/src/movement_rules.cpp
     ../ngs/src/transition_engine.cpp
     ../ngs/src/evaluation.cpp
@@ -77,7 +78,7 @@ include(CTest)
 if(BUILD_TESTING)
     # The common interface is tested without linking any algorithm.
     add_executable(vvws_decision_engine_contract_test
-        ../common/tests/decision_engine_test.cpp
+        ../common/include/vvw/tests/decision_engine_test.cpp
     )
     target_include_directories(vvws_decision_engine_contract_test PRIVATE
         "${VVW_COMMON_INCLUDE_DIR}"
