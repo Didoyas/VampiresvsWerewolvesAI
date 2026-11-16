@@ -1,0 +1,20 @@
+digraph G {
+  graph [rankdir=TB, bgcolor="white", pad="0.25", nodesep="0.35", ranksep="0.45", fontname="Arial", labelloc=t, label="VvW multi-algorithm client architecture", fontsize=18];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10, color="#64748b", penwidth=1.2, margin="0.16,0.10"];
+  edge [fontname="Arial", fontsize=9, color="#475569", arrowsize=0.8];
+  client [label="TCP client\nclient.cpp\nConnect • parse protocol • maintain GameState\nconvert BoardState • serialize MOV", fillcolor="#dbeafe", color="#2563eb"];
+  common [label="COMMON CONTRACT\nBoardState • TurnPlan • Species\nDecisionEngine • factory declaration", fillcolor="#dcfce7", color="#16a34a"];
+  ngs [label="NGS implementation\nAgent • NgsDecisionEngine\nOpponentHistory • search • NGS factory", fillcolor="#fef3c7", color="#d97706"];
+  exp [label="Expectiminimax implementation\nExpectiminimaxAgent • adapter\nsearch/history • Expectiminimax factory", fillcolor="#f3e8ff", color="#9333ea"];
+  n_exe [label="vvws_ngs.exe\nclient.cpp + NGS library + NGS factory", fillcolor="#fff7ed", color="#c2410c"];
+  e_exe [label="vvws_expectiminimax.exe\nclient.cpp + Expectiminimax library + its factory", fillcolor="#faf5ff", color="#7e22ce"];
+  client -> common [label="uses shared types and interface"];
+  common -> ngs [label="implemented by"];
+  common -> exp [label="implemented by"];
+  ngs -> n_exe [label="linked into NGS build"];
+  exp -> e_exe [label="linked into Expectiminimax build"];
+  client -> n_exe [style=dashed, label="same client source"];
+  client -> e_exe [style=dashed, label="same client source"];
+  {rank=same; ngs; exp;}
+  {rank=same; n_exe; e_exe;}
+}

@@ -1,0 +1,18 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad="0.25", nodesep="0.40", ranksep="0.55", fontname="Arial", labelloc=t, label="Factory selection happens at link time", fontsize=18];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10, color="#64748b", penwidth=1.2, margin="0.16,0.10"];
+  edge [fontname="Arial", fontsize=9, color="#475569", arrowsize=0.8];
+  client [label="client.cpp\nCalls makeDecisionEngine()\nCalls DecisionEngine methods", fillcolor="#dbeafe", color="#2563eb"];
+  common [label="decision_engine.hpp\ndecision_engine_factory.hpp\nShared types + function declaration", fillcolor="#dcfce7", color="#16a34a"];
+  ngsf [label="NGS factory definition\nreturns NgsDecisionEngine", fillcolor="#fef3c7", color="#d97706"];
+  expf [label="Expectiminimax factory definition\nreturns ExpectiminimaxDecisionEngine", fillcolor="#f3e8ff", color="#9333ea"];
+  exe1 [label="vvws_ngs.exe\nclient + common + NGS factory/library", fillcolor="#fff7ed", color="#c2410c"];
+  exe2 [label="vvws_expectiminimax.exe\nclient + common + Expectiminimax factory/library", fillcolor="#faf5ff", color="#7e22ce"];
+  client -> common [label="compile-time declarations"];
+  common -> ngsf [style=dashed, label="one implementation selected"];
+  common -> expf [style=dashed, label="one implementation selected"];
+  client -> exe1;
+  ngsf -> exe1;
+  client -> exe2;
+  expf -> exe2;
+}

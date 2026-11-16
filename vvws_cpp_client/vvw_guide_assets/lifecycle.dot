@@ -1,0 +1,17 @@
+digraph G {
+  graph [rankdir=TB, bgcolor="white", pad="0.25", nodesep="0.25", ranksep="0.35", fontname="Arial", labelloc=t, label="One game: client and decision-engine lifecycle", fontsize=18];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10, color="#64748b", penwidth=1.1, margin="0.16,0.10"];
+  edge [fontname="Arial", fontsize=9, color="#475569", arrowsize=0.8];
+  setup [label="Receive SET / HUM / HME / MAP\nClient reconstructs initial GameState", fillcolor="#dbeafe", color="#2563eb"];
+  factory [label="Create one engine for this game\nmakeDecisionEngine(ourSpecies)", fillcolor="#dcfce7", color="#16a34a"];
+  start [label="onGameStart(initialBoard)\nAlgorithm initializes game-specific state", fillcolor="#fef3c7", color="#d97706"];
+  upd [label="Receive UPD\nApply update to client's GameState", fillcolor="#dbeafe", color="#2563eb"];
+  board [label="Convert latest state to common BoardState", fillcolor="#dbeafe", color="#2563eb"];
+  choose [label="engine->chooseMove(board)\nReturns common TurnPlan", fillcolor="#dcfce7", color="#16a34a"];
+  mov [label="Convert TurnPlan to protocol MOV records\nSend MOV through TCP socket", fillcolor="#dbeafe", color="#2563eb"];
+  more [shape=diamond, label="Another UPD?", style=filled, fillcolor="#f1f5f9", color="#64748b"];
+  end [label="Game ends / connection closes\nDestroy engine; its owned state is released", fillcolor="#fee2e2", color="#dc2626"];
+  setup -> factory -> start -> upd -> board -> choose -> mov -> more;
+  more -> upd [label="yes", constraint=false];
+  more -> end [label="no"];
+}
