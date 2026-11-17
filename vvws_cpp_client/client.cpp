@@ -243,6 +243,9 @@ public:
     }
 
     void sendMoves(const std::vector<Move>& moves) {
+        if (moves.empty()) {
+            throw std::runtime_error("Cannot send an empty MOV packet");
+        }
         if (moves.size() > 255) {
             throw std::runtime_error("MOV contains too many moves for the one-byte count field");
         }
@@ -446,7 +449,8 @@ public:
             case Command::Hme:
                 homePosition_ = message.position;
                 hasHomePosition_ = true;
-                inferOurSpecies();
+                // HME only identifies the home coordinate. The initial MAP
+                // supplies the populations needed to identify our species.
                 break;
 
             case Command::Map:
@@ -456,12 +460,17 @@ public:
                         throw std::runtime_error("Server sent an update outside the board");
                     }
                     Cell& cell = at(update.x, update.y);
-                    // UPD contains the new values for the cell, not deltas.
+                    // MAP/UPD contain the new values for the cell, not deltas.
                     cell.humans = update.humans;
                     cell.vampires = update.vampires;
                     cell.werewolves = update.werewolves;
                 }
-                inferOurSpecies();
+
+                // Infer identity from the initial board only. An opponent may
+                // later occupy our home cell; that must never change our side.
+                if (message.command == Command::Map) {
+                    initializeOurSpeciesFromInitialMap();
+                }
                 break;
 
             case Command::End:
@@ -511,10 +520,17 @@ private:
         return cells_.at(index(x, y));
     }
 
-    void inferOurSpecies() {
+    void initializeOurSpeciesFromInitialMap() {
+        // Species is a per-game identity, not a property of whoever currently
+        // occupies the home cell. Once identified, it must remain immutable
+        // until clear() starts the next game.
+        if (ourSpecies_ != Species::Unknown) {
+            return;
+        }
         if (!hasHomePosition_ || !isInside(homePosition_.x, homePosition_.y)) {
             return;
         }
+
         const Cell& home = at(homePosition_.x, homePosition_.y);
         if (home.vampires > 0 && home.werewolves == 0) {
             ourSpecies_ = Species::Vampires;
@@ -720,11 +736,18 @@ static void playConnection(ClientSocket& client) {
 
                 const vvw::game::BoardState board = toGameBoardState(state);
                 const vvw::game::TurnPlan plan = engine->chooseMove(board);
-                const std::vector<Move> moves = toProtocolMoves(plan, state);
 
+                // The game protocol does not define an empty MOV as a legal
+                // pass. Refuse to send it rather than leaving the server
+                // waiting for a turn payload that cannot make progress.
                 if (plan.moves.empty()) {
-                    logInfo("Decision engine returned no move; sending an empty MOV packet");
+                    throw std::runtime_error(
+                        "Decision engine returned an empty turn plan; "
+                        "refusing to send an empty MOV packet"
+                    );
                 }
+
+                const std::vector<Move> moves = toProtocolMoves(plan, state);
                 logInfo("Decision engine produced " + std::to_string(moves.size()) +
                         " move(s)");
                 client.sendMoves(moves);
