@@ -328,6 +328,148 @@ void testInvalidBoardStorage() {
     assert(result.error == ValidationError::InvalidBoard);
 }
 
+
+void testDestinationPopulationAtWireLimitAllowed() {
+    BoardState board = createTestBoard();
+    board.at({1, 1}).vampires = 255;
+
+    TurnPlan plan = createPlan({1, 1}, 255, {2, 1});
+
+    const auto result =
+        validateTurnPlan(board, plan, Species::Vampires);
+
+    assert(result.valid());
+}
+
+void testMultipleArrivalsAtDestinationWithinWireLimit() {
+    BoardState board = createTestBoard();
+    board.at({1, 1}).vampires = 200;
+    board.at({2, 2}).vampires = 55;
+
+    TurnPlan plan;
+    plan.moves.push_back({{1, 1}, 200, {2, 1}});
+    plan.moves.push_back({{2, 2}, 55, {2, 1}});
+
+    const auto result =
+        validateTurnPlan(board, plan, Species::Vampires);
+
+    assert(result.valid());
+}
+
+void testMultipleArrivalsExceedDestinationWireLimit() {
+    BoardState board = createTestBoard();
+    board.at({1, 1}).vampires = 200;
+    board.at({2, 2}).vampires = 56;
+
+    TurnPlan plan;
+    plan.moves.push_back({{1, 1}, 200, {2, 1}});
+    plan.moves.push_back({{2, 2}, 56, {2, 1}});
+
+    const auto result =
+        validateTurnPlan(board, plan, Species::Vampires);
+
+    assert(result.error ==
+           ValidationError::DestinationPopulationExceedsWireLimit);
+    assert(result.moveIndex == 0);
+}
+
+void testFriendlyDestinationMergeAtWireLimitAllowed() {
+    BoardState board = createTestBoard();
+    board.at({1, 1}).vampires = 245;
+    board.at({2, 1}).vampires = 10;
+
+    TurnPlan plan = createPlan({1, 1}, 245, {2, 1});
+
+    const auto result =
+        validateTurnPlan(board, plan, Species::Vampires);
+
+    assert(result.valid());
+}
+
+void testFriendlyDestinationMergeExceedsWireLimit() {
+    BoardState board = createTestBoard();
+    board.at({1, 1}).vampires = 246;
+    board.at({2, 1}).vampires = 10;
+
+    TurnPlan plan = createPlan({1, 1}, 246, {2, 1});
+
+    const auto result =
+        validateTurnPlan(board, plan, Species::Vampires);
+
+    assert(result.error ==
+           ValidationError::DestinationPopulationExceedsWireLimit);
+}
+
+void testDeterministicHumanConversionAtWireLimitAllowed() {
+    BoardState board = createTestBoard();
+    board.at({1, 1}).vampires = 250;
+    board.at({2, 1}).humans = 5;
+
+    TurnPlan plan = createPlan({1, 1}, 250, {2, 1});
+
+    const auto result =
+        validateTurnPlan(board, plan, Species::Vampires);
+
+    assert(result.valid());
+}
+
+void testDeterministicHumanConversionExceedsWireLimit() {
+    BoardState board = createTestBoard();
+    board.at({1, 1}).vampires = 250;
+    board.at({2, 1}).humans = 10;
+
+    TurnPlan plan = createPlan({1, 1}, 250, {2, 1});
+
+    const auto result =
+        validateTurnPlan(board, plan, Species::Vampires);
+
+    assert(result.error ==
+           ValidationError::DestinationPopulationExceedsWireLimit);
+}
+
+void testRandomHumanConversionOverflowDependsOnOption() {
+    BoardState board = createTestBoard();
+    board.at({1, 1}).vampires = 100;
+    board.at({2, 1}).humans = 200;
+
+    TurnPlan plan = createPlan({1, 1}, 100, {2, 1});
+
+    // When post-random-battle conversion is enabled, an attacker victory
+    // could produce a friendly population above the one-byte wire limit.
+    ValidationOptions conversionEnabled;
+    const auto enabledResult = validateTurnPlan(
+        board, plan, Species::Vampires, conversionEnabled);
+
+    assert(enabledResult.error ==
+           ValidationError::DestinationPopulationExceedsWireLimit);
+
+    // When conversion is disabled, surviving humans remain human. The
+    // friendly population cannot exceed the 100 arriving vampires.
+    ValidationOptions conversionDisabled;
+    conversionDisabled.convertHumansAfterRandomBattle = false;
+    const auto disabledResult = validateTurnPlan(
+        board, plan, Species::Vampires, conversionDisabled);
+
+    assert(disabledResult.valid());
+}
+
+void testEnemyEncounterWithPossibleAttackerWinExceedsWireLimit() {
+    BoardState board = createTestBoard();
+    board.at({1, 1}).vampires = 200;
+    board.at({2, 2}).vampires = 56;
+    board.at({2, 1}).werewolves = 255;
+
+    TurnPlan plan;
+    plan.moves.push_back({{1, 1}, 200, {2, 1}});
+    plan.moves.push_back({{2, 2}, 56, {2, 1}});
+
+    const auto result =
+        validateTurnPlan(board, plan, Species::Vampires);
+
+    assert(result.error ==
+           ValidationError::DestinationPopulationExceedsWireLimit);
+}
+
 } // namespace
 
 int main() {
@@ -361,6 +503,16 @@ int main() {
 
     testSamePlySourceDestinationConflict();
     testInvalidBoardStorage();
+
+    testDestinationPopulationAtWireLimitAllowed();
+    testMultipleArrivalsAtDestinationWithinWireLimit();
+    testMultipleArrivalsExceedDestinationWireLimit();
+    testFriendlyDestinationMergeAtWireLimitAllowed();
+    testFriendlyDestinationMergeExceedsWireLimit();
+    testDeterministicHumanConversionAtWireLimitAllowed();
+    testDeterministicHumanConversionExceedsWireLimit();
+    testRandomHumanConversionOverflowDependsOnOption();
+    testEnemyEncounterWithPossibleAttackerWinExceedsWireLimit();
 
     std::cout << "All movement rules tests passed.\n";
 

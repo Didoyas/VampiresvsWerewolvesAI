@@ -86,6 +86,14 @@ if(BUILD_TESTING)
     target_compile_features(vvws_decision_engine_contract_test PRIVATE cxx_std_17)
     vvw_enable_warnings(vvws_decision_engine_contract_test)
 
+    # Movement validation, including destination population wire limits.
+    add_executable(vvws_movement_rules_test
+        ../ngs/tests/movement_rules_test.cpp
+    )
+    target_link_libraries(vvws_movement_rules_test PRIVATE vvws_ngs)
+    target_compile_features(vvws_movement_rules_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_movement_rules_test)
+
     # Existing NGS history test.
     add_executable(vvws_opponent_history_test
         ../ngs/tests/opponent_history_test.cpp
@@ -113,6 +121,7 @@ if(BUILD_TESTING)
     # Assertions must remain active in Release builds for these unit tests.
     foreach(test_target IN ITEMS
         vvws_decision_engine_contract_test
+        vvws_movement_rules_test
         vvws_opponent_history_test
         vvws_agent_test
         vvws_ngs_decision_engine_test
@@ -129,6 +138,10 @@ if(BUILD_TESTING)
         COMMAND vvws_decision_engine_contract_test
     )
     add_test(
+        NAME movement_rules_unit
+        COMMAND vvws_movement_rules_test
+    )
+    add_test(
         NAME opponent_history_unit
         COMMAND vvws_opponent_history_test
     )
@@ -143,6 +156,7 @@ if(BUILD_TESTING)
 
     set_tests_properties(
         decision_engine_contract_unit
+        movement_rules_unit
         opponent_history_unit
         agent_orchestration_unit
         ngs_decision_engine_unit

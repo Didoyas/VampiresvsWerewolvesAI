@@ -19,7 +19,8 @@ enum class ValidationError {
     SamePlySourceDestinationConflict,
     MissingPreviousPlyFootprint,
     PreviousDestinationUsedAsSource,
-    PreviousSourceUsedAsDestination
+    PreviousSourceUsedAsDestination,
+    DestinationPopulationExceedsWireLimit
 };
 
 struct ValidationResult {
@@ -38,6 +39,10 @@ struct ValidationResult {
 // cross-ply validation is intentionally unavailable, such as isolated tests.
 struct ValidationOptions {
     bool requirePreviousPlyFootprint{true};
+
+    // Must match TransitionOptions when validating a simulated transition.
+    // The default matches the production transition setting.
+    bool convertHumansAfterRandomBattle{true};
 };
 
 // Validate a complete movement plan for the specified species.

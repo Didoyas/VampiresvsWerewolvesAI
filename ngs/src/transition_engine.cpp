@@ -494,6 +494,8 @@ TransitionResult applyTurnPlan(
     ValidationOptions validationOptions;
     validationOptions.requirePreviousPlyFootprint =
         options.requirePreviousPlyFootprint;
+    validationOptions.convertHumansAfterRandomBattle =
+        options.convertHumansAfterRandomBattle;
 
     const ValidationResult validation =
         validateTurnPlan(
