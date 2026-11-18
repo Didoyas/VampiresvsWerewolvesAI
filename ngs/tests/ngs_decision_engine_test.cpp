@@ -1,10 +1,14 @@
+
 #include "ngs_decision_engine.hpp"
 #include "movement_rules.hpp"
 #include "vvw/game/decision_engine_factory.hpp"
 
 #include <cassert>
+#include <chrono>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
+#include <string>
 
 namespace {
 
@@ -66,10 +70,72 @@ void testNgsFactoryAndDecisionEngineContract() {
     }
 }
 
+void testNoLegalMoveReportsSpecificError() {
+    vvw::game::BoardState board = makeBoard();
+
+    // Remove all our vampires. The board remains structurally valid,
+    // but there is no friendly group capable of making a move.
+    board.at({1, 1}).vampires = 0;
+    board.at({2, 1}).humans = 0;
+
+    vvw::ngs::NgsDecisionEngine engine(
+        vvw::game::Species::Vampires
+    );
+
+    bool threwExpectedError = false;
+
+    try {
+        (void)engine.chooseMove(board);
+    } catch (const std::runtime_error& error) {
+        threwExpectedError = true;
+        assert(
+            std::string(error.what()).find(
+                "NGS agent found no legal move"
+            ) != std::string::npos
+        );
+    }
+
+    assert(threwExpectedError);
+}
+
+void testInvalidInputReportsSpecificError() {
+    vvw::game::BoardState board = makeBoard();
+
+    // The adapter controls Vampires, but the board claims that
+    // Werewolves are the player species.
+    board.ourSpecies = vvw::game::Species::Werewolves;
+
+    vvw::ngs::NgsDecisionEngine engine(
+        vvw::game::Species::Vampires
+    );
+
+    bool threwExpectedError = false;
+
+    try {
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::milliseconds{100};
+
+        (void)engine.chooseMove(board, deadline);
+    } catch (const std::runtime_error& error) {
+        threwExpectedError = true;
+        assert(
+            std::string(error.what()).find(
+                "NGS agent rejected the board"
+            ) != std::string::npos
+        );
+    }
+
+    assert(threwExpectedError);
+}
+
 } // namespace
 
 int main() {
     testNgsFactoryAndDecisionEngineContract();
-    std::cout << "NGS DecisionEngine adapter test passed.\n";
+    testNoLegalMoveReportsSpecificError();
+    testInvalidInputReportsSpecificError();
+
+    std::cout << "NGS DecisionEngine adapter tests passed.\n";
     return 0;
 }
