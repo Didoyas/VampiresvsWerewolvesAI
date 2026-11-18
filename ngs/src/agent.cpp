@@ -26,46 +26,6 @@ Population populationFor(const Cell& cell, Species species) noexcept {
     return 0;
 }
 
-int destinationPreference(
-    const BoardState& board,
-    Position source,
-    Position destination,
-    Species species,
-    Population moving
-) noexcept {
-    const Cell& target = board.cells[board.index(destination)];
-    const Population enemy = populationFor(target, opponentOf(species));
-    const Population own = populationFor(target, species);
-
-    if (target.humans > 0) {
-        // Prefer a conversion we can plausibly complete; an under-strength
-        // human encounter is retained only as a last-resort legal action.
-        return moving >= target.humans
-            ? 100000 + static_cast<int>(std::min<Population>(target.humans, 10000))
-            : -10000;
-    }
-
-    if (enemy > 0) {
-        // Respect the game's 1.5:1 deterministic combat threshold.
-        if (static_cast<std::uint64_t>(moving) * 2 >=
-            static_cast<std::uint64_t>(enemy) * 3) {
-            return 80000 + static_cast<int>(std::min<Population>(enemy, 10000));
-        }
-        return -20000;
-    }
-
-    if (own > 0) {
-        return 20000 + static_cast<int>(std::min<Population>(own, 10000));
-    }
-
-    // A house is a strategic target even when it currently has no humans.
-    if (target.isHouse) {
-        return 15000;
-    }
-
-    (void)source;
-    return 1000;
-}
 
 } // namespace
 
@@ -160,20 +120,27 @@ bool Agent::validatePlan(
     ).valid();
 }
 
-TurnPlan Agent::makeEmergencyFallback(const BoardState& board) const {
+TurnPlan Agent::makeEmergencyFallback(
+    const BoardState& board,
+    std::chrono::steady_clock::time_point deadline
+) const {
+    using Clock = std::chrono::steady_clock;
     static constexpr int directions[8][2] = {
         {-1, -1}, {0, -1}, {1, -1},
         {-1,  0},          {1,  0},
         {-1,  1}, {0,  1}, {1,  1}
     };
 
-    TurnPlan bestPlan;
-    TurnPlan firstLegalPlan;
-    int bestScore = std::numeric_limits<int>::min();
     const ValidationOptions validationOptions{board.previousPly.known};
 
+    // This is deliberately a first-legal-move policy, not a strategic search.
+    // Its purpose is to obtain a valid response before expensive processing.
     for (int y = 0; y < board.rows; ++y) {
         for (int x = 0; x < board.columns; ++x) {
+            if (Clock::now() >= deadline) {
+                return {};
+            }
+
             const Position source{x, y};
             const Population available =
                 populationFor(board.at(source), ourSpecies_);
@@ -185,11 +152,14 @@ TurnPlan Agent::makeEmergencyFallback(const BoardState& board) const {
                 std::min(available, kMaxWireMovementCount);
 
             for (const auto& direction : directions) {
+                if (Clock::now() >= deadline) {
+                    return {};
+                }
+
                 const Position destination{
                     x + direction[0],
                     y + direction[1]
                 };
-
                 if (!board.inBounds(destination)) {
                     continue;
                 }
@@ -197,36 +167,19 @@ TurnPlan Agent::makeEmergencyFallback(const BoardState& board) const {
                 TurnPlan candidate;
                 candidate.moves.push_back(Move{source, moving, destination});
 
-                if (!validateTurnPlan(
+                if (validateTurnPlan(
                         board,
                         candidate,
                         ourSpecies_,
                         validationOptions
                     ).valid()) {
-                    continue;
-                }
-
-                if (firstLegalPlan.moves.empty()) {
-                    firstLegalPlan = candidate;
-                }
-
-                const int score = destinationPreference(
-                    board,
-                    source,
-                    destination,
-                    ourSpecies_,
-                    moving
-                );
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestPlan = std::move(candidate);
+                    return candidate;
                 }
             }
         }
     }
 
-    return bestPlan.moves.empty() ? firstLegalPlan : bestPlan;
+    return {};
 }
 
 void Agent::advanceTurn() noexcept {
@@ -236,9 +189,17 @@ void Agent::advanceTurn() noexcept {
 }
 
 AgentDecision Agent::chooseMove(const BoardState& board) {
+    const auto legacyDeadline =
+        std::chrono::steady_clock::now() + options_.searchBudget;
+    return chooseMove(board, legacyDeadline);
+}
+
+AgentDecision Agent::chooseMove(
+    const BoardState& board,
+    std::chrono::steady_clock::time_point deadline
+) {
     using Clock = std::chrono::steady_clock;
     const auto startedAt = Clock::now();
-    const auto searchDeadline = startedAt + options_.searchBudget;
 
     AgentDecision decision;
     decision.turnNumber = nextTurnNumber_;
@@ -259,6 +220,17 @@ AgentDecision Agent::chooseMove(const BoardState& board) {
         !isPlayableSpecies(ourSpecies_) ||
         board.ourSpecies != ourSpecies_) {
         decision.method = AgentDecisionMethod::InvalidInput;
+        return finish();
+    }
+
+    // Establish a legal response before history updates, candidate generation,
+    // or opponent search. Keep it available as the safety fallback.
+    const TurnPlan emergencyFallback = makeEmergencyFallback(board, deadline);
+    if (Clock::now() >= deadline) {
+        decision.plan = emergencyFallback;
+        decision.method = decision.plan.moves.empty()
+            ? AgentDecisionMethod::NoLegalMove
+            : AgentDecisionMethod::EmergencyFallback;
         return finish();
     }
 
@@ -300,7 +272,7 @@ AgentDecision Agent::chooseMove(const BoardState& board) {
 
     bool selectedBySearch = false;
     if (generated.valid() && !generated.candidates.empty() &&
-        Clock::now() < searchDeadline) {
+        Clock::now() < deadline) {
         OpponentSearchResult search;
         if (decision.historyUpdated) {
             search = searchTurnCandidates(
@@ -336,9 +308,8 @@ AgentDecision Agent::chooseMove(const BoardState& board) {
         return finish();
     }
 
-    // Search may be unavailable early in a game or skipped when candidate
-    // generation consumed the configured search budget. Keep a generated,
-    // independently validated candidate as the deterministic fallback.
+    // Prefer a generated candidate when available; otherwise return the
+    // emergency move established at the start of the turn.
     if (generated.valid()) {
         for (const TurnPlan& candidate : generated.candidates) {
             if (validatePlan(board, candidate)) {
@@ -349,8 +320,7 @@ AgentDecision Agent::chooseMove(const BoardState& board) {
         }
     }
 
-    // Last-resort legal one-move policy, independent of the search pipeline.
-    decision.plan = makeEmergencyFallback(board);
+    decision.plan = emergencyFallback;
     decision.method = decision.plan.moves.empty()
         ? AgentDecisionMethod::NoLegalMove
         : AgentDecisionMethod::EmergencyFallback;

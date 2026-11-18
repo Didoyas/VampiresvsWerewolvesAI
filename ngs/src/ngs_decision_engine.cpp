@@ -22,4 +22,13 @@ vvw::game::TurnPlan NgsDecisionEngine::chooseMove(
     return decision.plan;
 }
 
+vvw::game::TurnPlan NgsDecisionEngine::chooseMove(
+    const vvw::game::BoardState& board,
+    vvw::game::DecisionDeadline deadline
+) {
+    const AgentDecision decision = agent_.chooseMove(board, deadline);
+
+    return decision.plan;
+}
+
 } // namespace vvw::ngs

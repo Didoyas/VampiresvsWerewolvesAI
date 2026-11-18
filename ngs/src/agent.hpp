@@ -65,7 +65,16 @@ public:
     // first UPD. Safe to call once after SET/HUM/HME/MAP.
     bool observeInitialState(const BoardState& initialBoard);
 
+    // Compatibility entry point for callers that do not provide a deadline.
+    // The configured searchBudget is used only for this legacy overload.
     AgentDecision chooseMove(const BoardState& board);
+
+    // Uses the caller's absolute steady-clock deadline. It is never reset
+    // inside the Agent.
+    AgentDecision chooseMove(
+        const BoardState& board,
+        std::chrono::steady_clock::time_point deadline
+    );
 
     Species ourSpecies() const noexcept;
     std::uint32_t nextTurnNumber() const noexcept;
@@ -84,7 +93,10 @@ private:
         const BoardState& board,
         const TurnPlan& plan
     ) const;
-    TurnPlan makeEmergencyFallback(const BoardState& board) const;
+    TurnPlan makeEmergencyFallback(
+        const BoardState& board,
+        std::chrono::steady_clock::time_point deadline
+    ) const;
     void advanceTurn() noexcept;
 };
 

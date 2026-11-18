@@ -17,6 +17,11 @@ public:
         const vvw::game::BoardState& board
     ) override;
 
+    vvw::game::TurnPlan chooseMove(
+        const vvw::game::BoardState& board,
+        vvw::game::DecisionDeadline deadline
+    ) override;
+
 private:
     Agent agent_;
 };
