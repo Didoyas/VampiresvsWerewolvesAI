@@ -40,6 +40,13 @@ void configureThreeSources(BoardState& board) {
     board.at({0, 4}).vampires = 60;
 }
 
+void configureFourSources(BoardState& board) {
+    board.at({0, 0}).vampires = 100;
+    board.at({4, 0}).vampires = 80;
+    board.at({0, 4}).vampires = 60;
+    board.at({4, 4}).vampires = 40;
+}
+
 void testGeneratesTwoSourcePlans() {
     BoardState board = makeBoard();
     configureTwoSources(board);
@@ -88,6 +95,77 @@ void testGeneratesThreeSourcePlans() {
     }
 }
 
+void testGeneratesFourSourcePlans() {
+    BoardState board = makeBoard();
+    configureFourSources(board);
+
+    MultiMoveCandidateOptions options;
+    options.maxMovesPerPlan = 4;
+    options.maxSingleMoveCandidates = 0;
+    options.maxTwoMoveCandidates = 0;
+    options.maxThreeMoveCandidates = 0;
+    options.maxFourMoveCandidates = 8;
+
+    const MultiMoveCandidateResult result =
+        generateMultiMoveCandidates(board, Species::Vampires, options);
+
+    assert(result.valid());
+    assert(result.stats.sourceGroupsAvailable == 4);
+    assert(result.stats.fourMoveCandidatesGenerated > 0);
+
+    for (const TurnPlan& plan : result.candidates) {
+        assert(plan.moves.size() == 4);
+        assert(hasDistinctSources(plan));
+        assert(validateTurnPlan(board, plan, Species::Vampires).valid());
+    }
+}
+
+void testFourMoveCandidateQuotaIsRespected() {
+    BoardState board = makeBoard();
+    configureFourSources(board);
+
+    MultiMoveCandidateOptions options;
+    options.maxMovesPerPlan = 4;
+    options.maxSingleMoveCandidates = 0;
+    options.maxTwoMoveCandidates = 0;
+    options.maxThreeMoveCandidates = 0;
+    options.maxFourMoveCandidates = 2;
+    options.variantsPerSourceCombination = 4;
+
+    const MultiMoveCandidateResult result =
+        generateMultiMoveCandidates(board, Species::Vampires, options);
+
+    assert(result.valid());
+    assert(result.stats.fourMoveCandidatesGenerated <= 2);
+    assert(result.candidates.size() <= 2);
+
+    for (const TurnPlan& plan : result.candidates) {
+        assert(plan.moves.size() == 4);
+        assert(hasDistinctSources(plan));
+    }
+}
+
+void testFourMoveCombinationAttemptBudgetIsEnforced() {
+    BoardState board = makeBoard();
+    configureFourSources(board);
+
+    MultiMoveCandidateOptions options;
+    options.maxMovesPerPlan = 4;
+    options.maxSingleMoveCandidates = 0;
+    options.maxTwoMoveCandidates = 0;
+    options.maxThreeMoveCandidates = 0;
+    options.maxFourMoveCandidates = 100;
+    options.variantsPerSourceCombination = 10;
+    options.maxCombinationAttempts = 1;
+
+    const MultiMoveCandidateResult result =
+        generateMultiMoveCandidates(board, Species::Vampires, options);
+
+    assert(result.valid());
+    assert(result.stats.combinationAttempts <= 1);
+    assert(result.stats.combinationBudgetExhausted);
+}
+
 void testEveryCompositePlanUsesDifferentSourceCells() {
     BoardState board = makeBoard();
     board.at({1, 1}).vampires = 100;
@@ -127,6 +205,7 @@ void testSingleMoveFallbacksAreRetained() {
     assert(result.valid());
     assert(result.candidates.size() == 5);
     assert(result.stats.singleMoveCandidatesIncluded == 5);
+
     for (const TurnPlan& plan : result.candidates) {
         assert(plan.moves.size() == 1);
     }
@@ -176,7 +255,7 @@ void testInvalidOptionsAreReported() {
     configureTwoSources(board);
 
     MultiMoveCandidateOptions options;
-    options.maxMovesPerPlan = 4;
+    options.maxMovesPerPlan = 5;
 
     const MultiMoveCandidateResult result =
         generateMultiMoveCandidates(board, Species::Vampires, options);
@@ -212,9 +291,11 @@ void testGenerationIsDeterministic() {
     for (std::size_t i = 0; i < first.candidates.size(); ++i) {
         assert(first.candidates[i].moves.size() ==
                second.candidates[i].moves.size());
+
         for (std::size_t j = 0; j < first.candidates[i].moves.size(); ++j) {
             const Move& a = first.candidates[i].moves[j];
             const Move& b = second.candidates[i].moves[j];
+
             assert(a.source == b.source);
             assert(a.destination == b.destination);
             assert(a.count == b.count);
@@ -238,6 +319,9 @@ void testNoAvailableGroupsProducesValidEmptyResult() {
 int main() {
     testGeneratesTwoSourcePlans();
     testGeneratesThreeSourcePlans();
+    testGeneratesFourSourcePlans();
+    testFourMoveCandidateQuotaIsRespected();
+    testFourMoveCombinationAttemptBudgetIsEnforced();
     testEveryCompositePlanUsesDifferentSourceCells();
     testSingleMoveFallbacksAreRetained();
     testCandidateQuotasAreRespected();

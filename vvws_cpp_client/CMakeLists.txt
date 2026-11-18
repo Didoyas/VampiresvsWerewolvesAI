@@ -118,13 +118,21 @@ if(BUILD_TESTING)
     target_compile_features(vvws_agent_test PRIVATE cxx_std_17)
     vvw_enable_warnings(vvws_agent_test)
 
-    # New test: NGS is usable through the shared DecisionEngine interface.
+        # New test: NGS is usable through the shared DecisionEngine interface.
     add_executable(vvws_ngs_decision_engine_test
         ../ngs/tests/ngs_decision_engine_test.cpp
     )
     target_link_libraries(vvws_ngs_decision_engine_test PRIVATE vvws_ngs)
     target_compile_features(vvws_ngs_decision_engine_test PRIVATE cxx_std_17)
     vvw_enable_warnings(vvws_ngs_decision_engine_test)
+
+    # Multi-move candidate generation, including four-source plans.
+    add_executable(vvws_multi_move_candidate_generator_test
+        ../ngs/tests/multi_move_candidate_generator_test.cpp
+    )
+    target_link_libraries(vvws_multi_move_candidate_generator_test PRIVATE vvws_ngs)
+    target_compile_features(vvws_multi_move_candidate_generator_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_multi_move_candidate_generator_test)
 
     # Assertions must remain active in Release builds for these unit tests.
     foreach(test_target IN ITEMS
@@ -134,6 +142,7 @@ if(BUILD_TESTING)
         vvws_opponent_history_test
         vvws_agent_test
         vvws_ngs_decision_engine_test
+        vvws_multi_move_candidate_generator_test
     )
         if(MSVC)
             target_compile_options(${test_target} PRIVATE /UNDEBUG)
@@ -166,6 +175,10 @@ if(BUILD_TESTING)
         NAME ngs_decision_engine_unit
         COMMAND vvws_ngs_decision_engine_test
     )
+    add_test(
+        NAME multi_move_candidate_generator_unit
+        COMMAND vvws_multi_move_candidate_generator_test
+    )
 
     set_tests_properties(
         decision_engine_contract_unit
@@ -174,6 +187,7 @@ if(BUILD_TESTING)
         opponent_history_unit
         agent_orchestration_unit
         ngs_decision_engine_unit
+        multi_move_candidate_generator_unit
         PROPERTIES TIMEOUT 30
     )
 

@@ -2,7 +2,7 @@
 
 #include "candidate_generator.hpp"
 #include "search_deadline.hpp"
-
+#include "vvw/game/types.hpp"
 #include <cstddef>
 #include <vector>
 
@@ -25,6 +25,7 @@ struct MultiMoveCandidateOptions {
     std::size_t maxSingleMoveCandidates{48};
     std::size_t maxTwoMoveCandidates{128};
     std::size_t maxThreeMoveCandidates{64};
+    std::size_t maxFourMoveCandidates{0};
 
     // Number of deterministic movement combinations sampled for each
     // selected set of source cells.
@@ -47,10 +48,12 @@ enum class MultiMoveCandidateError {
 struct MultiMoveCandidateStats {
     std::size_t singleMoveCandidatesAvailable{0};
     std::size_t sourceGroupsAvailable{0};
-
+    // Generates a bounded portfolio containing single-, two-, three- and
+    // optionally four-movement plans. Every returned plan is validated.
     std::size_t singleMoveCandidatesIncluded{0};
     std::size_t twoMoveCandidatesGenerated{0};
     std::size_t threeMoveCandidatesGenerated{0};
+    std::size_t fourMoveCandidatesGenerated{0};
 
     std::size_t combinationAttempts{0};
     std::size_t combinationsRejectedByValidator{0};
