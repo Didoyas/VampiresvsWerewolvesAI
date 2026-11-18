@@ -190,9 +190,20 @@ void runMockServer(SocketHandle listener) {
             {'S', 'E', 'T', 5, 5},
             {'H', 'U', 'M', 1, 0, 0},
             {'H', 'M', 'E', 2, 2},
-            {'M', 'A', 'P', 1, 2, 2, 0, 5, 0},
-            {'U', 'P', 'D', 0}
+
+            // Initial MAP:
+            // Home cell (2,2): 5 werewolves.
+            // Second group (4,4): 5 werewolves.
+            {'M', 'A', 'P', 2,
+                2, 2, 0, 0, 5,
+                4, 4, 0, 0, 5},
+
+            // Opponent occupies our home cell with 25 vampires.
+            // Our species must remain Werewolves.
+            {'U', 'P', 'D', 1,
+                2, 2, 0, 25, 0}
         };
+
         for (const auto& packet : setupPackets) {
             sendFragmented(connection, packet);
         }
@@ -212,8 +223,11 @@ void runMockServer(SocketHandle listener) {
         const std::uint8_t targetX = moveBytes[3];
         const std::uint8_t targetY = moveBytes[4];
 
-        check(sourceX == 2 && sourceY == 2, "MOV source must be the home cell (2,2)");
-        check(creatureCount >= 1 && creatureCount <= 5, "MOV must transfer between 1 and 5 creatures from the five-creature source group");
+        check(sourceX == 4 && sourceY == 4,
+            "MOV source must be the remaining werewolf group at (4,4)");
+
+        check(creatureCount >= 1 && creatureCount <= 5,
+            "MOV must use no more than the five werewolves at (4,4)");
         const int dx = static_cast<int>(targetX) - static_cast<int>(sourceX);
         const int dy = static_cast<int>(targetY) - static_cast<int>(sourceY);
         check((dx != 0 || dy != 0) && std::abs(dx) <= 1 && std::abs(dy) <= 1,
