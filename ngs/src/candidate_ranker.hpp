@@ -1,6 +1,7 @@
 #pragma once
 
 #include "evaluation.hpp"
+#include "search_deadline.hpp"
 #include "transition_engine.hpp"
 
 #include <cstddef>
@@ -76,6 +77,8 @@ struct CandidateRankingStats {
 
 struct CandidateRankingResult {
     CandidateRankingError error{CandidateRankingError::None};
+    // If true, ranked contains only candidates completed before the deadline.
+    bool timedOut{false};
 
     // Sorted in descending rankingScore order.
     // ranked.front() is the best candidate.
@@ -95,7 +98,8 @@ CandidateRankingResult rankTurnCandidates(
     const BoardState& board,
     const std::vector<TurnPlan>& candidates,
     Species actingSpecies,
-    const CandidateRankingOptions& options = {}
+    const CandidateRankingOptions& options = {},
+    SearchDeadline deadline = SearchDeadline::max()
 );
 
 } // namespace vvw::ngs

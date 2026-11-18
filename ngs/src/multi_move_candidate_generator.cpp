@@ -80,12 +80,19 @@ bool alreadyPresent(
 // explicit per-cell index so grouping remains linear in the number of moves.
 std::vector<SourceBucket> makeSourceBuckets(
     const BoardState& board,
-    const CandidateGenerationResult& singles
+    const CandidateGenerationResult& singles,
+    SearchDeadline deadline,
+    bool& timedOut
 ) {
     std::vector<SourceBucket> buckets;
     std::vector<std::size_t> bucketForCell(board.cells.size(), kNoBucket);
 
     for (const TurnPlan& plan : singles.candidates) {
+        if (deadlineReached(deadline)) {
+            timedOut = true;
+            break;
+        }
+
         if (plan.moves.size() != 1) {
             continue;
         }
@@ -112,12 +119,21 @@ void appendSampledSingles(
     const CandidateGenerationResult& singles,
     std::size_t limit,
     std::vector<TurnPlan>& output,
-    MultiMoveCandidateStats& stats
+    MultiMoveCandidateStats& stats,
+    SearchDeadline deadline,
+    bool& timedOut
 ) {
     const std::size_t available = singles.candidates.size();
     const std::size_t count = std::min(available, limit);
 
     for (std::size_t i = 0; i < count; ++i) {
+        if (deadlineReached(deadline)) {
+            timedOut = true;
+            if (i > 0) {
+                break;
+            }
+        }
+
         const std::size_t index = count == 1
             ? 0
             : (i * (available - 1)) / (count - 1);
@@ -143,7 +159,8 @@ std::size_t selectedMoveIndex(
 MultiMoveCandidateResult generateMultiMoveCandidates(
     const BoardState& board,
     Species actingSpecies,
-    const MultiMoveCandidateOptions& options
+    const MultiMoveCandidateOptions& options,
+    SearchDeadline deadline
 ) {
     if (!validOptions(options)) {
         return failure(MultiMoveCandidateError::InvalidOptions);
@@ -153,7 +170,8 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
         generateSingleMoveCandidates(
             board,
             actingSpecies,
-            options.singleMoveOptions
+            options.singleMoveOptions,
+            deadline
         );
 
     if (!singles.valid()) {
@@ -163,24 +181,43 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
     MultiMoveCandidateResult result;
     result.stats.singleMoveCandidatesAvailable = singles.candidates.size();
 
-    const std::vector<SourceBucket> buckets =
-        makeSourceBuckets(board, singles);
-    result.stats.sourceGroupsAvailable = buckets.size();
-
-    // Keep one-move actions in the portfolio as a safe fallback. Compound
-    // quotas are independent so a large single-move list cannot crowd them out.
+    // Preserve the safe one-move portfolio before spending time constructing
+    // compound candidates. It remains usable if Stage 1 or Stage 2 times out.
+    bool helperTimedOut = false;
     appendSampledSingles(
         singles,
         options.maxSingleMoveCandidates,
         result.candidates,
-        result.stats
+        result.stats,
+        deadline,
+        helperTimedOut
     );
+
+    if (singles.timedOut || helperTimedOut ||
+        deadlineReached(deadline)) {
+        result.timedOut = true;
+        return result;
+    }
+
+    const std::vector<SourceBucket> buckets =
+        makeSourceBuckets(board, singles, deadline, helperTimedOut);
+    result.stats.sourceGroupsAvailable = buckets.size();
+
+    if (helperTimedOut || deadlineReached(deadline)) {
+        result.timedOut = true;
+        return result;
+    }
 
     ValidationOptions validationOptions;
     validationOptions.requirePreviousPlyFootprint =
         options.singleMoveOptions.requirePreviousPlyFootprint;
 
     const auto appendCombination = [&](const TurnPlan& plan) -> bool {
+        if (deadlineReached(deadline)) {
+            result.timedOut = true;
+            return false;
+        }
+
         if (result.stats.combinationAttempts >=
             options.maxCombinationAttempts) {
             result.stats.combinationBudgetExhausted = true;
@@ -199,19 +236,33 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
 
         if (!validation.valid()) {
             ++result.stats.combinationsRejectedByValidator;
+            if (deadlineReached(deadline)) {
+                result.timedOut = true;
+                return false;
+            }
             return true;
         }
 
         if (alreadyPresent(result.candidates, plan)) {
             ++result.stats.duplicatePlansSkipped;
+            if (deadlineReached(deadline)) {
+                result.timedOut = true;
+                return false;
+            }
             return true;
         }
 
+        // Every appended plan has passed the validator. Keep it even if the
+        // validator/deduplication work crossed the deadline, but stop here.
         result.candidates.push_back(plan);
         if (plan.moves.size() == 2) {
             ++result.stats.twoMoveCandidatesGenerated;
         } else if (plan.moves.size() == 3) {
             ++result.stats.threeMoveCandidatesGenerated;
+        }
+        if (deadlineReached(deadline)) {
+            result.timedOut = true;
+            return false;
         }
         return true;
     };
@@ -223,11 +274,13 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
     if (pairQuota > 0 && buckets.size() >= 2) {
         for (std::size_t offset = 1;
              offset < buckets.size() &&
-             result.stats.twoMoveCandidatesGenerated < pairQuota;
+             result.stats.twoMoveCandidatesGenerated < pairQuota &&
+             !result.timedOut;
              ++offset) {
             for (std::size_t first = 0;
                  first + offset < buckets.size() &&
-                 result.stats.twoMoveCandidatesGenerated < pairQuota;
+                 result.stats.twoMoveCandidatesGenerated < pairQuota &&
+                 !result.timedOut;
                  ++first) {
                 const SourceBucket& a = buckets[first];
                 const SourceBucket& b = buckets[first + offset];
@@ -238,7 +291,8 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
 
                 for (std::size_t variant = 0;
                      variant < variants &&
-                     result.stats.twoMoveCandidatesGenerated < pairQuota;
+                     result.stats.twoMoveCandidatesGenerated < pairQuota &&
+                     !result.timedOut;
                      ++variant) {
                     TurnPlan plan;
                     plan.moves.push_back(
@@ -261,14 +315,17 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
     // smaller than the two-source quota.
     const std::size_t tripleQuota = options.maxThreeMoveCandidates;
     if (options.maxMovesPerPlan >= 3 &&
-        tripleQuota > 0 && buckets.size() >= 3) {
+        tripleQuota > 0 && buckets.size() >= 3 &&
+        !result.timedOut) {
         for (std::size_t gap = 1;
              gap + 1 < buckets.size() &&
-             result.stats.threeMoveCandidatesGenerated < tripleQuota;
+             result.stats.threeMoveCandidatesGenerated < tripleQuota &&
+             !result.timedOut;
              ++gap) {
             for (std::size_t first = 0;
                  first + gap + 1 < buckets.size() &&
-                 result.stats.threeMoveCandidatesGenerated < tripleQuota;
+                 result.stats.threeMoveCandidatesGenerated < tripleQuota &&
+                 !result.timedOut;
                  ++first) {
                 const SourceBucket& a = buckets[first];
                 const SourceBucket& b = buckets[first + gap];
@@ -283,7 +340,8 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
 
                 for (std::size_t variant = 0;
                      variant < variants &&
-                     result.stats.threeMoveCandidatesGenerated < tripleQuota;
+                     result.stats.threeMoveCandidatesGenerated < tripleQuota &&
+                     !result.timedOut;
                      ++variant) {
                     TurnPlan plan;
                     plan.moves.push_back(
@@ -304,6 +362,7 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
         }
     }
 
+    result.timedOut = result.timedOut || deadlineReached(deadline);
     return result;
 }
 

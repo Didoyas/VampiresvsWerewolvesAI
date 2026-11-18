@@ -246,12 +246,19 @@ std::vector<ResponseCandidateInfo> selectOpponentResponses(
     const std::vector<TurnPlan>& candidates,
     Species opponentSpecies,
     const OpponentPredictionResult* predictions,
-    const OpponentSearchOptions& options
+    const OpponentSearchOptions& options,
+    SearchDeadline deadline,
+    bool& timedOut
 ) {
     std::vector<ResponseCandidateInfo> all;
     all.reserve(candidates.size());
 
     for (std::size_t i = 0; i < candidates.size(); ++i) {
+        if (deadlineReached(deadline)) {
+            timedOut = true;
+            return {};
+        }
+
         ResponseCandidateInfo info;
 
         info.candidateIndex = i;
@@ -284,6 +291,10 @@ std::vector<ResponseCandidateInfo> selectOpponentResponses(
     std::vector<std::size_t> predictionOrder(all.size());
 
     for (std::size_t i = 0; i < all.size(); ++i) {
+        if (deadlineReached(deadline)) {
+            timedOut = true;
+            return {};
+        }
         predictionOrder[i] = i;
     }
 
@@ -306,7 +317,16 @@ std::vector<ResponseCandidateInfo> selectOpponentResponses(
         }
     );
 
+    if (deadlineReached(deadline)) {
+        timedOut = true;
+        return {};
+    }
+
     for (const std::size_t index : predictionOrder) {
+        if (deadlineReached(deadline)) {
+            timedOut = true;
+            return {};
+        }
         if (selected.size() >= options.maxOpponentResponses ||
             selected.size() >= options.maxLikelyOpponentResponses) {
             break;
@@ -327,6 +347,10 @@ std::vector<ResponseCandidateInfo> selectOpponentResponses(
     std::vector<std::size_t> tacticalOrder(all.size());
 
     for (std::size_t i = 0; i < all.size(); ++i) {
+        if (deadlineReached(deadline)) {
+            timedOut = true;
+            return {};
+        }
         tacticalOrder[i] = i;
     }
 
@@ -349,9 +373,19 @@ std::vector<ResponseCandidateInfo> selectOpponentResponses(
         }
     );
 
+    if (deadlineReached(deadline)) {
+        timedOut = true;
+        return {};
+    }
+
     std::size_t adversarialSelections = 0;
 
     for (const std::size_t index : tacticalOrder) {
+        if (deadlineReached(deadline)) {
+            timedOut = true;
+            return {};
+        }
+
         const ResponseCandidateInfo& candidate = all[index];
 
         // Only genuinely threatening responses qualify for the
@@ -412,6 +446,11 @@ std::vector<ResponseCandidateInfo> selectOpponentResponses(
             selected.push_back(fallback);
         } else {
             for (std::size_t i = 0; i < fallbackCount; ++i) {
+                if (deadlineReached(deadline)) {
+                    timedOut = true;
+                    return {};
+                }
+
                 const std::size_t index =
                     i * (candidates.size() - 1) /
                     (fallbackCount - 1);
@@ -462,7 +501,8 @@ OpponentSearchResult searchCore(
     const std::vector<TurnPlan>& candidates,
     Species actingSpecies,
     const OpponentPredictionResult* predictions,
-    const OpponentSearchOptions& options
+    const OpponentSearchOptions& options,
+    SearchDeadline deadline
 ) {
     OpponentSearchResult result;
 
@@ -501,8 +541,22 @@ OpponentSearchResult searchCore(
             board,
             candidates,
             actingSpecies,
-            options.rootRankingOptions
+            options.rootRankingOptions,
+            deadline
         );
+
+    if (!rootRanking.ranked.empty()) {
+        result.hasRootRankingFallbackCandidate = true;
+        result.rootRankingFallbackCandidateIndex =
+            rootRanking.ranked.front().candidateIndex;
+    }
+
+    result.timedOut = rootRanking.timedOut;
+    if (deadlineReached(deadline) || rootRanking.timedOut) {
+        result.timedOut = true;
+        result.error = OpponentSearchError::NoValidSearchResults;
+        return result;
+    }
 
     if (!rootRanking.valid()) {
         result.error = OpponentSearchError::RootRankingFailed;
@@ -530,6 +584,10 @@ OpponentSearchResult searchCore(
     for (std::size_t rootRank = 0;
          rootRank < rootCount;
          ++rootRank) {
+        if (deadlineReached(deadline)) {
+            result.timedOut = true;
+            break;
+        }
 
         const std::size_t originalCandidateIndex =
             rootRanking.ranked[rootRank].candidateIndex;
@@ -553,9 +611,15 @@ OpponentSearchResult searchCore(
         // Step 3: Monte Carlo simulations for stochastic battles.
         // -----------------------------------------------------
 
+        bool candidateInterrupted = false;
         for (std::size_t simulation = 0;
              simulation < options.simulationsPerRootCandidate;
              ++simulation) {
+            if (deadlineReached(deadline)) {
+                result.timedOut = true;
+                candidateInterrupted = true;
+                break;
+            }
 
             ++result.stats.rootSimulationsAttempted;
 
@@ -577,6 +641,12 @@ OpponentSearchResult searchCore(
                     options.rootRankingOptions.transitionOptions
                 );
 
+            if (deadlineReached(deadline)) {
+                result.timedOut = true;
+                candidateInterrupted = true;
+                break;
+            }
+
             if (!ourTransition.valid()) {
                 ++result.stats.rootTransitionFailures;
                 continue;
@@ -595,8 +665,16 @@ OpponentSearchResult searchCore(
                 generateMultiMoveCandidates(
                     afterOurMove,
                     opponentSpecies,
-                    options.opponentGenerationOptions
+                    options.opponentGenerationOptions,
+                    deadline
                 );
+
+            if (opponentGeneration.timedOut ||
+                deadlineReached(deadline)) {
+                result.timedOut = true;
+                candidateInterrupted = true;
+                break;
+            }
 
             if (!opponentGeneration.valid()) {
                 ++result.stats.opponentGenerationFailures;
@@ -618,13 +696,22 @@ OpponentSearchResult searchCore(
             if (responseCount == 0) {
                 double positionScore = 0.0;
 
-                if (!evaluateForUs(
+                const bool positionEvaluationSucceeded =
+                    evaluateForUs(
                         afterOurMove,
                         actingSpecies,
                         opponentSpecies,
                         options,
-                        positionScore)) {
+                        positionScore
+                    );
 
+                if (deadlineReached(deadline)) {
+                    result.timedOut = true;
+                    candidateInterrupted = true;
+                    break;
+                }
+
+                if (!positionEvaluationSucceeded) {
                     ++result.stats.evaluationFailures;
                     continue;
                 }
@@ -644,14 +731,23 @@ OpponentSearchResult searchCore(
             // responses.
             // -------------------------------------------------
 
+            bool selectionTimedOut = false;
             const std::vector<ResponseCandidateInfo> selected =
                 selectOpponentResponses(
                     afterOurMove,
                     opponentCandidates,
                     opponentSpecies,
                     predictions,
-                    options
+                    options,
+                    deadline,
+                    selectionTimedOut
                 );
+
+            if (selectionTimedOut) {
+                result.timedOut = true;
+                candidateInterrupted = true;
+                break;
+            }
 
             if (selected.empty()) {
                 ++result.stats.opponentResponsesSkippedByBudget;
@@ -681,6 +777,12 @@ OpponentSearchResult searchCore(
             outcomes.reserve(selected.size());
 
             for (const ResponseCandidateInfo& response : selected) {
+                if (deadlineReached(deadline)) {
+                    result.timedOut = true;
+                    candidateInterrupted = true;
+                    break;
+                }
+
                 ++result.stats.opponentResponsesExamined;
                 ++responsesExaminedForCandidate;
 
@@ -713,6 +815,12 @@ OpponentSearchResult searchCore(
                         options.rootRankingOptions.transitionOptions
                     );
 
+                if (deadlineReached(deadline)) {
+                    result.timedOut = true;
+                    candidateInterrupted = true;
+                    break;
+                }
+
                 if (!opponentTransition.valid()) {
                     ++result.stats.opponentTransitionFailures;
                     continue;
@@ -721,13 +829,22 @@ OpponentSearchResult searchCore(
                 double responseScore = 0.0;
 
                 // After the opponent's response, it is our turn.
-                if (!evaluateForUs(
+                const bool responseEvaluationSucceeded =
+                    evaluateForUs(
                         opponentTransition.nextState,
                         actingSpecies,
                         actingSpecies,
                         options,
-                        responseScore)) {
+                        responseScore
+                    );
 
+                if (deadlineReached(deadline)) {
+                    result.timedOut = true;
+                    candidateInterrupted = true;
+                    break;
+                }
+
+                if (!responseEvaluationSucceeded) {
                     ++result.stats.evaluationFailures;
                     continue;
                 }
@@ -743,6 +860,10 @@ OpponentSearchResult searchCore(
                 outcomes.push_back(outcome);
 
                 ++result.stats.opponentResponsesEvaluated;
+            }
+
+            if (candidateInterrupted) {
+                break;
             }
 
             if (outcomes.empty()) {
@@ -823,6 +944,13 @@ OpponentSearchResult searchCore(
             ++result.stats.simulationsCompleted;
         }
 
+        // Do not publish a score for a root candidate whose simulations
+        // or opponent-response evaluations were interrupted. Earlier fully
+        // evaluated root candidates remain available as the timeout result.
+        if (candidateInterrupted) {
+            break;
+        }
+
         // -----------------------------------------------------
         // Step 11: Summarise this root candidate.
         // -----------------------------------------------------
@@ -873,6 +1001,7 @@ OpponentSearchResult searchCore(
     // ---------------------------------------------------------
 
     if (result.ranked.empty()) {
+        result.timedOut = result.timedOut || deadlineReached(deadline);
         result.error =
             OpponentSearchError::NoValidSearchResults;
         return result;
@@ -897,6 +1026,7 @@ OpponentSearchResult searchCore(
         result.ranked.front().candidateIndex;
 
     result.error = OpponentSearchError::None;
+    result.timedOut = result.timedOut || deadlineReached(deadline);
 
     return result;
 }
@@ -911,14 +1041,16 @@ OpponentSearchResult searchTurnCandidates(
     const BoardState& board,
     const std::vector<TurnPlan>& candidates,
     Species actingSpecies,
-    const OpponentSearchOptions& options
+    const OpponentSearchOptions& options,
+    SearchDeadline deadline
 ) {
     return searchCore(
         board,
         candidates,
         actingSpecies,
         nullptr,
-        options
+        options,
+        deadline
     );
 }
 
@@ -932,8 +1064,16 @@ OpponentSearchResult searchTurnCandidates(
     Species actingSpecies,
     const OpponentHistory& history,
     std::uint32_t currentTurn,
-    const OpponentSearchOptions& options
+    const OpponentSearchOptions& options,
+    SearchDeadline deadline
 ) {
+    if (deadlineReached(deadline)) {
+        OpponentSearchResult result;
+        result.error = OpponentSearchError::NoValidSearchResults;
+        result.timedOut = true;
+        return result;
+    }
+
     const OpponentPredictionResult predictions =
         predictOpponentBehaviour(
             board,
@@ -941,13 +1081,22 @@ OpponentSearchResult searchTurnCandidates(
             currentTurn
         );
 
+    if (deadlineReached(deadline)) {
+        OpponentSearchResult result;
+        result.error = OpponentSearchError::NoValidSearchResults;
+        result.timedOut = true;
+        result.predictionError = predictions.error;
+        return result;
+    }
+
     if (predictions.valid()) {
         return searchCore(
             board,
             candidates,
             actingSpecies,
             &predictions,
-            options
+            options,
+            deadline
         );
     }
 
@@ -960,7 +1109,8 @@ OpponentSearchResult searchTurnCandidates(
             candidates,
             actingSpecies,
             nullptr,
-            options
+            options,
+            deadline
         );
 
     result.predictionError = predictions.error;

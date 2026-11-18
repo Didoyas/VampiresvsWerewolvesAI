@@ -121,7 +121,8 @@ CandidateRankingResult rankTurnCandidates(
     const BoardState& board,
     const std::vector<TurnPlan>& candidates,
     Species actingSpecies,
-    const CandidateRankingOptions& options
+    const CandidateRankingOptions& options,
+    SearchDeadline deadline
 ) {
     // 1. Validate input board.
     if (!board.hasValidStorage()) {
@@ -169,6 +170,11 @@ CandidateRankingResult rankTurnCandidates(
 
     // 6. Evaluate each selected candidate.
     for (const std::size_t candidateIndex : selectedIndices) {
+        if (deadlineReached(deadline)) {
+            result.timedOut = true;
+            break;
+        }
+
         const TurnPlan& candidate = candidates[candidateIndex];
 
         ScoreAccumulator scores;
@@ -177,9 +183,15 @@ CandidateRankingResult rankTurnCandidates(
         bool firstSimulationCompleted = false;
 
         // Each rollout starts from the same original board.
+        bool candidateInterrupted = false;
         for (std::size_t simulation = 0;
              simulation < options.simulationsPerCandidate;
              ++simulation) {
+            if (deadlineReached(deadline)) {
+                result.timedOut = true;
+                candidateInterrupted = true;
+                break;
+            }
 
             ++result.stats.simulationsAttempted;
 
@@ -204,6 +216,14 @@ CandidateRankingResult rankTurnCandidates(
                     options.transitionOptions
                 );
 
+            // A single transition is not interruptible. If it crossed the
+            // deadline, do not start an evaluation or publish a partial score.
+            if (deadlineReached(deadline)) {
+                result.timedOut = true;
+                candidateInterrupted = true;
+                break;
+            }
+
             if (!transition.valid()) {
                 ++result.stats.transitionFailures;
                 ++result.stats.simulationsFailed;
@@ -221,6 +241,14 @@ CandidateRankingResult rankTurnCandidates(
                     nextPlayer,
                     options.evaluationWeights
                 );
+
+            // Evaluation is also a non-preemptible operation. Never count a
+            // candidate if its current rollout finished beyond the deadline.
+            if (deadlineReached(deadline)) {
+                result.timedOut = true;
+                candidateInterrupted = true;
+                break;
+            }
 
             if (!evaluation.valid()) {
                 ++result.stats.evaluationFailures;
@@ -247,6 +275,12 @@ CandidateRankingResult rankTurnCandidates(
             if (simulation == 0 && !stochasticCandidate) {
                 break;
             }
+        }
+
+        // Do not publish a partial score for a candidate whose rollout
+        // sequence was interrupted. Previously completed candidates remain.
+        if (candidateInterrupted) {
+            break;
         }
 
         // 7. Skip candidates for which no simulation succeeded.
@@ -284,6 +318,7 @@ CandidateRankingResult rankTurnCandidates(
 
     // 9. If every candidate failed, return an error.
     if (result.ranked.empty()) {
+        result.timedOut = result.timedOut || deadlineReached(deadline);
         result.error = CandidateRankingError::NoValidCandidates;
         return result;
     }
@@ -306,6 +341,7 @@ CandidateRankingResult rankTurnCandidates(
         }
     );
 
+    result.timedOut = result.timedOut || deadlineReached(deadline);
     return result;
 }
 

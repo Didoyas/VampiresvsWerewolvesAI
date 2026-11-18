@@ -1,6 +1,7 @@
 #pragma once
 
 #include "candidate_generator.hpp"
+#include "search_deadline.hpp"
 
 #include <cstddef>
 #include <vector>
@@ -61,6 +62,8 @@ struct MultiMoveCandidateResult {
     MultiMoveCandidateError error{MultiMoveCandidateError::None};
     std::vector<TurnPlan> candidates;
     MultiMoveCandidateStats stats;
+    // Partial candidates remain valid when generation reaches the deadline.
+    bool timedOut{false};
 
     bool valid() const noexcept {
         return error == MultiMoveCandidateError::None;
@@ -72,7 +75,8 @@ struct MultiMoveCandidateResult {
 MultiMoveCandidateResult generateMultiMoveCandidates(
     const BoardState& board,
     Species actingSpecies,
-    const MultiMoveCandidateOptions& options = {}
+    const MultiMoveCandidateOptions& options = {},
+    SearchDeadline deadline = SearchDeadline::max()
 );
 
 } // namespace vvw::ngs

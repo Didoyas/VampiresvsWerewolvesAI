@@ -11,9 +11,9 @@
 
 namespace vvw::ngs {
 
-// Conservative initial limits for the integrated agent. These are workload
-// caps, not a hard real-time guarantee: Stage 7's search API is synchronous
-// and does not yet accept an interrupt/deadline callback.
+// Conservative initial limits for the integrated agent. Candidate generation,
+// ranking and opponent search cooperatively observe one absolute deadline.
+// Individual transition, evaluation and sorting operations are not preemptible.
 struct AgentOptions {
     MultiMoveCandidateOptions candidateGenerationOptions{};
     OpponentSearchOptions opponentSearchOptions{};
@@ -45,6 +45,8 @@ struct AgentDecision {
     bool crossPlyRestrictionsChecked{false};
 
     std::uint64_t elapsedMicroseconds{0};
+    // True when the shared absolute deadline was reached during this decision.
+    bool deadlineExceeded{false};
 
     bool hasMove() const noexcept {
         return !plan.moves.empty();
@@ -93,10 +95,7 @@ private:
         const BoardState& board,
         const TurnPlan& plan
     ) const;
-    TurnPlan makeEmergencyFallback(
-        const BoardState& board,
-        std::chrono::steady_clock::time_point deadline
-    ) const;
+    TurnPlan makeEmergencyFallback(const BoardState& board) const;
     void advanceTurn() noexcept;
 };
 

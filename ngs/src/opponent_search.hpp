@@ -3,6 +3,7 @@
 #include "candidate_ranker.hpp"
 #include "multi_move_candidate_generator.hpp"
 #include "opponent_predictor.hpp"
+#include "search_deadline.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -115,11 +116,19 @@ struct OpponentSearchStats {
 
 struct OpponentSearchResult {
     OpponentSearchError error{OpponentSearchError::None};
+    // True when search stopped at the shared deadline. Any returned ranking
+    // contains only root candidates fully evaluated before the deadline.
+    bool timedOut{false};
 
     std::vector<RootCandidateScore> ranked;
 
     bool hasBestCandidate{false};
     std::size_t bestCandidateIndex{0};
+
+    // Best fully evaluated root-ranking candidate. The agent may use this as
+    // a one-ply fallback if the deeper opponent-response search times out.
+    bool hasRootRankingFallbackCandidate{false};
+    std::size_t rootRankingFallbackCandidateIndex{0};
 
     OpponentSearchStats stats{};
 
@@ -143,7 +152,8 @@ OpponentSearchResult searchTurnCandidates(
     const BoardState& board,
     const std::vector<TurnPlan>& candidates,
     Species actingSpecies,
-    const OpponentSearchOptions& options = {}
+    const OpponentSearchOptions& options = {},
+    SearchDeadline deadline = SearchDeadline::max()
 );
 
 // -------------------------------------------------------------
@@ -160,7 +170,8 @@ OpponentSearchResult searchTurnCandidates(
     Species actingSpecies,
     const OpponentHistory& history,
     std::uint32_t currentTurn,
-    const OpponentSearchOptions& options = {}
+    const OpponentSearchOptions& options = {},
+    SearchDeadline deadline = SearchDeadline::max()
 );
 
 } // namespace vvw::ngs

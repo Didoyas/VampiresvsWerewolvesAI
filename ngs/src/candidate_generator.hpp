@@ -1,6 +1,7 @@
 #pragma once
 
 #include "movement_rules.hpp"
+#include "search_deadline.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -51,6 +52,9 @@ struct CandidateGenerationResult {
     CandidateGenerationError error{CandidateGenerationError::None};
     std::vector<TurnPlan> candidates;
     CandidateGenerationStats stats;
+    // True when generation stopped cooperatively at the shared deadline.
+    // A timed-out result may still contain valid, usable partial candidates.
+    bool timedOut{false};
 
     bool valid() const noexcept {
         return error == CandidateGenerationError::None;
@@ -65,7 +69,8 @@ struct CandidateGenerationResult {
 CandidateGenerationResult generateSingleMoveCandidates(
     const BoardState& board,
     Species actingSpecies,
-    const CandidateGenerationOptions& options = {}
+    const CandidateGenerationOptions& options = {},
+    SearchDeadline deadline = SearchDeadline::max()
 );
 
 } // namespace vvw::ngs

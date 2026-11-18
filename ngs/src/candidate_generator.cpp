@@ -101,7 +101,8 @@ CandidateGenerationResult failure(CandidateGenerationError error) {
 CandidateGenerationResult generateSingleMoveCandidates(
     const BoardState& board,
     Species actingSpecies,
-    const CandidateGenerationOptions& options
+    const CandidateGenerationOptions& options,
+    SearchDeadline deadline
 ) {
     if (!board.hasValidStorage()) {
         return failure(CandidateGenerationError::InvalidBoard);
@@ -130,8 +131,13 @@ CandidateGenerationResult generateSingleMoveCandidates(
 
     // Stable row-major source ordering and stable clockwise-style neighbour
     // ordering make candidate generation deterministic and reproducible.
-    for (int y = 0; y < board.rows; ++y) {
+    for (int y = 0; y < board.rows && !result.timedOut; ++y) {
         for (int x = 0; x < board.columns; ++x) {
+            if (deadlineReached(deadline)) {
+                result.timedOut = true;
+                break;
+            }
+
             const Position source{x, y};
             const Population sourcePopulation =
                 populationFor(board.at(source), actingSpecies);
@@ -149,8 +155,13 @@ CandidateGenerationResult generateSingleMoveCandidates(
                     result.stats.duplicateCountsSkipped
                 );
 
-            for (int dy = -1; dy <= 1; ++dy) {
+            for (int dy = -1; dy <= 1 && !result.timedOut; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
+                    if (deadlineReached(deadline)) {
+                        result.timedOut = true;
+                        break;
+                    }
+
                     if (dx == 0 && dy == 0) {
                         continue;
                     }
@@ -163,6 +174,11 @@ CandidateGenerationResult generateSingleMoveCandidates(
                     ++result.stats.neighbourCellsExamined;
 
                     for (const Population count : splitCounts) {
+                        if (deadlineReached(deadline)) {
+                            result.timedOut = true;
+                            break;
+                        }
+
                         TurnPlan plan;
                         plan.moves.push_back({source, count, destination});
 
@@ -180,12 +196,24 @@ CandidateGenerationResult generateSingleMoveCandidates(
                         } else {
                             ++result.stats.candidatesRejectedByValidator;
                         }
+
+                        // Validation is a bounded but non-preemptible call.
+                        // Preserve its result, then stop before examining the
+                        // next candidate if it consumed the remaining budget.
+                        if (deadlineReached(deadline)) {
+                            result.timedOut = true;
+                            break;
+                        }
                     }
+                }
+                if (result.timedOut) {
+                    break;
                 }
             }
         }
     }
 
+    result.timedOut = result.timedOut || deadlineReached(deadline);
     return result;
 }
 

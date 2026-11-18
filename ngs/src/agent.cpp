@@ -120,11 +120,7 @@ bool Agent::validatePlan(
     ).valid();
 }
 
-TurnPlan Agent::makeEmergencyFallback(
-    const BoardState& board,
-    std::chrono::steady_clock::time_point deadline
-) const {
-    using Clock = std::chrono::steady_clock;
+TurnPlan Agent::makeEmergencyFallback(const BoardState& board) const {
     static constexpr int directions[8][2] = {
         {-1, -1}, {0, -1}, {1, -1},
         {-1,  0},          {1,  0},
@@ -133,17 +129,16 @@ TurnPlan Agent::makeEmergencyFallback(
 
     const ValidationOptions validationOptions{board.previousPly.known};
 
-    // This is deliberately a first-legal-move policy, not a strategic search.
-    // Its purpose is to obtain a valid response before expensive processing.
+    // This is a safety response, not strategic search.
+    // It must still run if the search deadline has expired.
+    // Return immediately after finding the first legal move.
     for (int y = 0; y < board.rows; ++y) {
         for (int x = 0; x < board.columns; ++x) {
-            if (Clock::now() >= deadline) {
-                return {};
-            }
-
             const Position source{x, y};
+
             const Population available =
                 populationFor(board.at(source), ourSpecies_);
+
             if (available == 0) {
                 continue;
             }
@@ -152,20 +147,18 @@ TurnPlan Agent::makeEmergencyFallback(
                 std::min(available, kMaxWireMovementCount);
 
             for (const auto& direction : directions) {
-                if (Clock::now() >= deadline) {
-                    return {};
-                }
-
                 const Position destination{
-                    x + direction[0],
-                    y + direction[1]
+                    x + direction[0], y + direction[1]
                 };
+
                 if (!board.inBounds(destination)) {
                     continue;
                 }
 
                 TurnPlan candidate;
-                candidate.moves.push_back(Move{source, moving, destination});
+                candidate.moves.push_back(
+                    Move{source, moving, destination}
+                );
 
                 if (validateTurnPlan(
                         board,
@@ -212,6 +205,8 @@ AgentDecision Agent::chooseMove(
                 Clock::now() - startedAt
             ).count()
         );
+        decision.deadlineExceeded =
+            decision.deadlineExceeded || Clock::now() >= deadline;
         advanceTurn();
         return decision;
     };
@@ -225,14 +220,7 @@ AgentDecision Agent::chooseMove(
 
     // Establish a legal response before history updates, candidate generation,
     // or opponent search. Keep it available as the safety fallback.
-    const TurnPlan emergencyFallback = makeEmergencyFallback(board, deadline);
-    if (Clock::now() >= deadline) {
-        decision.plan = emergencyFallback;
-        decision.method = decision.plan.moves.empty()
-            ? AgentDecisionMethod::NoLegalMove
-            : AgentDecisionMethod::EmergencyFallback;
-        return finish();
-    }
+    const TurnPlan emergencyFallback = makeEmergencyFallback(board);
 
     // The protocol does not expose the previous opponent MOV. Do not infer
     // exact sources/destinations from sparse UPD cell snapshots; record only
@@ -246,6 +234,17 @@ AgentDecision Agent::chooseMove(
         ++nextHistoryUpdateNumber_;
     }
 
+    // History recording is a bounded but non-interruptible operation. Do not
+    // start candidate generation if it consumed the remaining turn budget.
+    if (Clock::now() >= deadline) {
+        decision.deadlineExceeded = true;
+        decision.plan = emergencyFallback;
+        decision.method = decision.plan.moves.empty()
+            ? AgentDecisionMethod::NoLegalMove
+            : AgentDecisionMethod::EmergencyFallback;
+        return finish();
+    }
+
     MultiMoveCandidateOptions generationOptions =
         options_.candidateGenerationOptions;
     generationOptions.singleMoveOptions.requirePreviousPlyFootprint =
@@ -255,8 +254,12 @@ AgentDecision Agent::chooseMove(
         generateMultiMoveCandidates(
             board,
             ourSpecies_,
-            generationOptions
+            generationOptions,
+            deadline
         );
+
+    decision.deadlineExceeded =
+        generated.timedOut || Clock::now() >= deadline;
 
     if (generated.valid()) {
         decision.candidatesGenerated = generated.candidates.size();
@@ -271,8 +274,9 @@ AgentDecision Agent::chooseMove(
         true; // After our simulated move, its footprint is known.
 
     bool selectedBySearch = false;
-    if (generated.valid() && !generated.candidates.empty() &&
-        Clock::now() < deadline) {
+    bool selectedByRootRankingFallback = false;
+    if (generated.valid() && !generated.timedOut &&
+        !generated.candidates.empty() && Clock::now() < deadline) {
         OpponentSearchResult search;
         if (decision.historyUpdated) {
             search = searchTurnCandidates(
@@ -281,7 +285,8 @@ AgentDecision Agent::chooseMove(
                 ourSpecies_,
                 history_,
                 historyUpdateNumber,
-                searchOptions
+                searchOptions,
+                deadline
             );
             decision.historyAwareSearchUsed = search.stats.predictionsUsed;
         } else {
@@ -289,17 +294,47 @@ AgentDecision Agent::chooseMove(
                 board,
                 generated.candidates,
                 ourSpecies_,
-                searchOptions
+                searchOptions,
+                deadline
             );
         }
 
+        decision.deadlineExceeded =
+            decision.deadlineExceeded || search.timedOut ||
+            Clock::now() >= deadline;
         decision.rootCandidatesEvaluated = search.stats.rootCandidatesEvaluated;
         decision.opponentResponsesEvaluated = search.stats.opponentResponsesEvaluated;
 
+        // A completed deeper search is preferred. A timeout during deeper
+        // search may still leave completed root candidates in this result.
         if (search.valid() && search.hasBestCandidate &&
             search.bestCandidateIndex < generated.candidates.size()) {
             decision.plan = generated.candidates[search.bestCandidateIndex];
-            selectedBySearch = validatePlan(board, decision.plan);
+            if (Clock::now() >= deadline) {
+                // Candidate generation already validated every returned plan.
+                decision.deadlineExceeded = true;
+                selectedBySearch = true;
+            } else {
+                selectedBySearch = validatePlan(board, decision.plan);
+            }
+        }
+
+        // If root ranking completed but opponent-response search timed out,
+        // retain its best fully ranked root candidate instead of discarding
+        // all useful work and reverting immediately to the emergency move.
+        if (!selectedBySearch && search.hasRootRankingFallbackCandidate &&
+            search.rootRankingFallbackCandidateIndex <
+                generated.candidates.size()) {
+            decision.plan = generated.candidates[
+                search.rootRankingFallbackCandidateIndex
+            ];
+            if (Clock::now() >= deadline) {
+                // This plan also comes from the already-validated generator.
+                decision.deadlineExceeded = true;
+                selectedByRootRankingFallback = true;
+            } else {
+                selectedByRootRankingFallback = validatePlan(board, decision.plan);
+            }
         }
     }
 
@@ -308,16 +343,30 @@ AgentDecision Agent::chooseMove(
         return finish();
     }
 
-    // Prefer a generated candidate when available; otherwise return the
-    // emergency move established at the start of the turn.
-    if (generated.valid()) {
+    if (selectedByRootRankingFallback) {
+        decision.method = AgentDecisionMethod::CandidateFallback;
+        return finish();
+    }
+
+    // Every plan emitted by the candidate generator has already passed the
+    // movement validator. When time remains, revalidate before selecting it;
+    // once the deadline is reached, use the generator's validated first plan.
+    if (generated.valid() && !generated.candidates.empty()) {
         for (const TurnPlan& candidate : generated.candidates) {
+            if (Clock::now() >= deadline) {
+                decision.deadlineExceeded = true;
+                break;
+            }
             if (validatePlan(board, candidate)) {
                 decision.plan = candidate;
                 decision.method = AgentDecisionMethod::CandidateFallback;
                 return finish();
             }
         }
+
+        decision.plan = generated.candidates.front();
+        decision.method = AgentDecisionMethod::CandidateFallback;
+        return finish();
     }
 
     decision.plan = emergencyFallback;

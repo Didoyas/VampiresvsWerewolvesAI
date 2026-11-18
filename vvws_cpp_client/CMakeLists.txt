@@ -94,6 +94,14 @@ if(BUILD_TESTING)
     target_compile_features(vvws_movement_rules_test PRIVATE cxx_std_17)
     vvw_enable_warnings(vvws_movement_rules_test)
 
+    # Cooperative deadline propagation across generation and search.
+    add_executable(vvws_search_deadline_test
+        ../ngs/tests/search_deadline_test.cpp
+    )
+    target_link_libraries(vvws_search_deadline_test PRIVATE vvws_ngs)
+    target_compile_features(vvws_search_deadline_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_search_deadline_test)
+
     # Existing NGS history test.
     add_executable(vvws_opponent_history_test
         ../ngs/tests/opponent_history_test.cpp
@@ -122,6 +130,7 @@ if(BUILD_TESTING)
     foreach(test_target IN ITEMS
         vvws_decision_engine_contract_test
         vvws_movement_rules_test
+        vvws_search_deadline_test
         vvws_opponent_history_test
         vvws_agent_test
         vvws_ngs_decision_engine_test
@@ -142,6 +151,10 @@ if(BUILD_TESTING)
         COMMAND vvws_movement_rules_test
     )
     add_test(
+        NAME search_deadline_unit
+        COMMAND vvws_search_deadline_test
+    )
+    add_test(
         NAME opponent_history_unit
         COMMAND vvws_opponent_history_test
     )
@@ -157,6 +170,7 @@ if(BUILD_TESTING)
     set_tests_properties(
         decision_engine_contract_unit
         movement_rules_unit
+        search_deadline_unit
         opponent_history_unit
         agent_orchestration_unit
         ngs_decision_engine_unit
