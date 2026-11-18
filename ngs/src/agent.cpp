@@ -31,10 +31,12 @@ Population populationFor(const Cell& cell, Species species) noexcept {
 
 AgentOptions::AgentOptions() {
     // Candidate generation is deliberately capped for 50x50 boards.
-    candidateGenerationOptions.maxMovesPerPlan = 3;
+    // Four-movement plans are enabled with a small quota to limit branching.
+    candidateGenerationOptions.maxMovesPerPlan = 4;
     candidateGenerationOptions.maxSingleMoveCandidates = 32;
     candidateGenerationOptions.maxTwoMoveCandidates = 48;
     candidateGenerationOptions.maxThreeMoveCandidates = 16;
+    candidateGenerationOptions.maxFourMoveCandidates = 4;
     candidateGenerationOptions.variantsPerSourceCombination = 2;
     candidateGenerationOptions.maxCombinationAttempts = 1500;
 
