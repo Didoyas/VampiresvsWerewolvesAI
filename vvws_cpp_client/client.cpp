@@ -50,6 +50,11 @@ static void logRx(const std::string& message) {
     std::cerr << "[RX]   " << message << '\n';
 }
 
+// The local UPD-to-MOV processing target. This is deliberately below the
+// server's 2-second response limit to leave margin for outbound network delay
+// and runtime variability; it is not itself a hard real-time guarantee.
+static constexpr std::chrono::milliseconds kLocalTurnResponseBudget{1500};
+
 // -----------------------------------------------------------------------------
 // Protocol data types
 // -----------------------------------------------------------------------------
@@ -732,10 +737,14 @@ static void playConnection(ClientSocket& client) {
                 // includes network transit time, which the client cannot know
                 // exactly from this side of the TCP connection.
                 const auto receivedAt = std::chrono::steady_clock::now();
+                const vvw::game::DecisionDeadline decisionDeadline =
+                    receivedAt + kLocalTurnResponseBudget;
+
                 state.apply(message);
 
                 const vvw::game::BoardState board = toGameBoardState(state);
-                const vvw::game::TurnPlan plan = engine->chooseMove(board);
+                const vvw::game::TurnPlan plan =
+                    engine->chooseMove(board, decisionDeadline);
 
                 // The game protocol does not define an empty MOV as a legal
                 // pass. Refuse to send it rather than leaving the server
@@ -755,8 +764,13 @@ static void playConnection(ClientSocket& client) {
                 const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     sentAt - receivedAt).count();
 
-                std::cerr << "[TIMING] Decision and MOV-send processing=" << elapsedMs
-                          << " ms (does not include waiting for or decoding the UPD packet)\n";
+                const bool withinLocalBudget = sentAt <= decisionDeadline;
+                std::cerr << "[TIMING] UPD-complete-to-MOV-send=" << elapsedMs
+                          << " ms; local budget="
+                          << kLocalTurnResponseBudget.count()
+                          << " ms; status="
+                          << (withinLocalBudget ? "WITHIN_BUDGET" : "BUDGET_EXCEEDED")
+                          << " (does not include waiting for or decoding the UPD packet)\n";
                 continue;
             }
 
