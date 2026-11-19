@@ -134,6 +134,22 @@ if(BUILD_TESTING)
     target_compile_features(vvws_multi_move_candidate_generator_test PRIVATE cxx_std_17)
     vvw_enable_warnings(vvws_multi_move_candidate_generator_test)
 
+    # Opponent movement prediction tests.
+    add_executable(vvws_opponent_predictor_test
+        ../ngs/tests/opponent_predictor_test.cpp
+    )
+    target_link_libraries(vvws_opponent_predictor_test PRIVATE vvws_ngs)
+    target_compile_features(vvws_opponent_predictor_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_opponent_predictor_test)
+
+    # History-aware opponent response search tests.
+    add_executable(vvws_opponent_search_test
+        ../ngs/tests/opponent_search_test.cpp
+    )
+    target_link_libraries(vvws_opponent_search_test PRIVATE vvws_ngs)
+    target_compile_features(vvws_opponent_search_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_opponent_search_test)
+
     # Assertions must remain active in Release builds for these unit tests.
     foreach(test_target IN ITEMS
         vvws_decision_engine_contract_test
@@ -143,6 +159,8 @@ if(BUILD_TESTING)
         vvws_agent_test
         vvws_ngs_decision_engine_test
         vvws_multi_move_candidate_generator_test
+        vvws_opponent_predictor_test
+        vvws_opponent_search_test
     )
         if(MSVC)
             target_compile_options(${test_target} PRIVATE /UNDEBUG)
@@ -180,6 +198,16 @@ if(BUILD_TESTING)
         COMMAND vvws_multi_move_candidate_generator_test
     )
 
+    add_test(
+        NAME opponent_predictor_unit
+        COMMAND vvws_opponent_predictor_test
+    )
+
+    add_test(
+        NAME opponent_search_unit
+        COMMAND vvws_opponent_search_test
+    )
+
     set_tests_properties(
         decision_engine_contract_unit
         movement_rules_unit
@@ -188,6 +216,8 @@ if(BUILD_TESTING)
         agent_orchestration_unit
         ngs_decision_engine_unit
         multi_move_candidate_generator_unit
+        opponent_predictor_unit
+        opponent_search_unit
         PROPERTIES TIMEOUT 30
     )
 
