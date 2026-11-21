@@ -96,7 +96,8 @@ struct OpponentSearchStats {
     std::size_t opponentResponsesGenerated{0};
     std::size_t opponentResponsesSkippedByBudget{0};
 
-    // Unique responses selected through each selection mechanism.
+    // Counts of response entries selected by each mechanism, aggregated over
+    // root simulations. The same candidate may contribute in multiple sims.
     std::size_t responsesSelectedByPrediction{0};
     std::size_t responsesSelectedForAdversarialCoverage{0};
 
@@ -109,9 +110,38 @@ struct OpponentSearchStats {
     std::size_t simulationsWithoutOpponentResponse{0};
     std::size_t simulationsCompleted{0};
 
-    // Prediction availability and fallback information.
+    // Prediction lifecycle. predictionsUsed is retained for compatibility and
+    // means a valid prediction object was passed into searchCore(). It does not
+    // by itself mean that a response received positive support or affected the
+    // expected-response calculation.
     bool predictionsUsed{false};
+    bool predictionAttempted{false};
+    bool predictionValid{false};
+    // True once the response-search core has actually been entered.
+    // Distinguishes a valid prediction from search skipped at the deadline.
+    bool responseSearchAttempted{false};
     bool predictionFallbackUsed{false};
+    OpponentPredictionError predictionError{
+        OpponentPredictionError::None
+    };
+    OpponentPredictionStats predictionStats{};
+
+    // Aggregated over response-selection calls (normally one per root
+    // simulation). These are work counters, not globally unique response-plan
+    // counts, and may exceed opponentResponsesGenerated for one simulation.
+    std::size_t responseCandidatesWithPositivePredictionSupport{0};
+    std::size_t responsesSelectedByBoth{0};
+
+    // Sum of heuristic supports that actually contributed to weighted expected
+    // scores, aggregated across root simulations. This is not a probability or
+    // a calibrated confidence value.
+    double predictionWeightUsed{0.0};
+    std::size_t weightedExpectedEvaluations{0};
+    std::size_t uniformExpectedEvaluations{0};
+
+    // Boundary timings in microseconds, measured outside inner search loops.
+    std::uint64_t predictionElapsedMicroseconds{0};
+    std::uint64_t searchElapsedMicroseconds{0};
 };
 
 struct OpponentSearchResult {

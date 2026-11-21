@@ -478,13 +478,46 @@ void testStage7UsesHistoricalPredictions() {
     assert(result.hasBestCandidate);
 
     assert(result.stats.predictionsUsed);
+    assert(result.stats.predictionAttempted);
+    assert(result.stats.predictionValid);
+    assert(result.stats.predictionError == OpponentPredictionError::None);
     assert(!result.stats.predictionFallbackUsed);
+    assert(result.stats.predictionStats.movementObservationsUsed == 3);
+    assert(result.stats.predictionStats.opponentGroupsObserved > 0);
+    assert(result.stats.predictionStats.destinationsRanked > 0);
 
+    assert(result.stats.responseCandidatesWithPositivePredictionSupport > 0);
     assert(result.stats.responsesSelectedByPrediction > 0);
+    assert(result.stats.weightedExpectedEvaluations > 0);
+    assert(result.stats.predictionWeightUsed > 0.0);
 
     assert(result.stats.opponentResponsesExamined > 0);
 
     assert(result.bestCandidateIndex == 0);
+}
+
+void testStage7ValidPredictionCanHaveNoMovementEvidence() {
+    BoardState board = makeStage7Board();
+    OpponentHistory history(Species::Werewolves);
+    assert(history.recordObservation(board, 3).valid());
+
+    const std::vector<TurnPlan> candidates{makeStage7RootPlan()};
+    const OpponentSearchResult result =
+        searchTurnCandidates(
+            board,
+            candidates,
+            Species::Vampires,
+            history,
+            3,
+            makeStage7Options()
+        );
+
+    assert(result.valid());
+    assert(result.stats.predictionAttempted);
+    assert(result.stats.predictionValid);
+    assert(result.stats.predictionStats.movementObservationsUsed == 0);
+    assert(result.stats.predictionStats.opponentGroupsObserved > 0);
+    assert(result.stats.predictionStats.destinationsRanked > 0);
 }
 
 void testStage7AlsoSelectsAdversarialResponses() {
@@ -541,7 +574,10 @@ void testStage7FallsBackWhenHistoryIsUnavailable() {
     assert(result.valid());
 
     assert(!result.stats.predictionsUsed);
+    assert(result.stats.predictionAttempted);
+    assert(!result.stats.predictionValid);
     assert(result.stats.predictionFallbackUsed);
+    assert(result.stats.predictionError == OpponentPredictionError::InvalidSpecies);
 
     assert(
         result.predictionError ==
@@ -549,6 +585,29 @@ void testStage7FallsBackWhenHistoryIsUnavailable() {
     );
 
     assert(result.hasBestCandidate);
+}
+
+void testExpiredDeadlineDoesNotAttemptPrediction() {
+    BoardState board = makeStage7Board();
+    OpponentHistory history = makeStage7History();
+    const std::vector<TurnPlan> candidates{makeStage7RootPlan()};
+
+    const OpponentSearchResult result =
+        searchTurnCandidates(
+            board,
+            candidates,
+            Species::Vampires,
+            history,
+            3,
+            makeStage7Options(),
+            SearchClock::now()
+        );
+
+    assert(!result.valid());
+    assert(result.timedOut);
+    assert(!result.stats.predictionAttempted);
+    assert(!result.stats.predictionValid);
+    assert(!result.stats.predictionFallbackUsed);
 }
 
 void testStage7PreservesOriginalSearchAPI() {
@@ -571,6 +630,8 @@ void testStage7PreservesOriginalSearchAPI() {
     assert(result.hasBestCandidate);
 
     assert(!result.stats.predictionsUsed);
+    assert(!result.stats.predictionAttempted);
+    assert(!result.stats.predictionValid);
     assert(!result.stats.predictionFallbackUsed);
 }
 
@@ -719,8 +780,10 @@ int main() {
 
     // Stage 7: history-aware opponent search.
     testStage7UsesHistoricalPredictions();
+    testStage7ValidPredictionCanHaveNoMovementEvidence();
     testStage7AlsoSelectsAdversarialResponses();
     testStage7FallsBackWhenHistoryIsUnavailable();
+    testExpiredDeadlineDoesNotAttemptPrediction();
     testStage7PreservesOriginalSearchAPI();
     testStage7FallsBackToLegalResponsesWithoutPredictionOrThreat();
     testStage7RejectsActingSpeciesMismatch();

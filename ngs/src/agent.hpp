@@ -39,11 +39,29 @@ struct AgentDecision {
     std::size_t rootCandidatesEvaluated{0};
     std::size_t opponentResponsesEvaluated{0};
 
+    bool historyUpdateAttempted{false};
     bool historyUpdated{false};
+    OpponentHistoryError historyUpdateError{OpponentHistoryError::None};
+    // True only when positive prediction support was used in at least one
+    // weighted expected-response evaluation, not merely when a predictor
+    // result was passed into the search.
     bool historyAwareSearchUsed{false};
     bool previousPlyWasUnknown{false};
     bool crossPlyRestrictionsChecked{false};
 
+    // History observation sequence is internal bookkeeping. It is not a
+    // server-provided official turn identifier. MAP can consume sequence 1.
+    std::uint32_t historyObservationNumber{0};
+    std::size_t historySnapshotsRetained{0};
+    std::size_t confirmedMovementObservations{0};
+
+    // Search/predictor diagnostics are copied out before the search result is
+    // discarded by the generic DecisionEngine adapter.
+    OpponentSearchStats opponentSearchStats{};
+
+    // Coarse phase timings. No timers are placed inside candidate/search loops.
+    std::uint64_t historyUpdateMicroseconds{0};
+    std::uint64_t candidateGenerationMicroseconds{0};
     std::uint64_t elapsedMicroseconds{0};
     // True when the shared absolute deadline was reached during this decision.
     bool deadlineExceeded{false};

@@ -248,6 +248,7 @@ std::vector<ResponseCandidateInfo> selectOpponentResponses(
     const OpponentPredictionResult* predictions,
     const OpponentSearchOptions& options,
     SearchDeadline deadline,
+    OpponentSearchStats& stats,
     bool& timedOut
 ) {
     std::vector<ResponseCandidateInfo> all;
@@ -268,6 +269,9 @@ std::vector<ResponseCandidateInfo> selectOpponentResponses(
                 candidates[i],
                 predictions
             );
+        if (info.predictionSupport > 0.0) {
+            ++stats.responseCandidatesWithPositivePredictionSupport;
+        }
 
         info.tacticalThreat =
             calculateTacticalThreatScore(
@@ -462,6 +466,13 @@ std::vector<ResponseCandidateInfo> selectOpponentResponses(
         }
     }
 
+    for (const ResponseCandidateInfo& response : selected) {
+        if (response.selectedByPrediction &&
+            response.selectedForAdversarialCoverage) {
+            ++stats.responsesSelectedByBoth;
+        }
+    }
+
     return selected;
 }
 
@@ -506,8 +517,13 @@ OpponentSearchResult searchCore(
 ) {
     OpponentSearchResult result;
 
+    result.stats.responseSearchAttempted = true;
     result.stats.rootCandidatesProvided = candidates.size();
     result.stats.predictionsUsed = predictions != nullptr;
+    result.stats.predictionValid = predictions != nullptr;
+    if (predictions != nullptr) {
+        result.stats.predictionStats = predictions->stats;
+    }
 
     if (!board.hasValidStorage()) {
         result.error = OpponentSearchError::InvalidBoard;
@@ -740,6 +756,7 @@ OpponentSearchResult searchCore(
                     predictions,
                     options,
                     deadline,
+                    result.stats,
                     selectionTimedOut
                 );
 
@@ -910,7 +927,10 @@ OpponentSearchResult searchCore(
             if (predictionWeightTotal > 0.0) {
                 expectedResponseScore =
                     weightedScoreTotal / predictionWeightTotal;
+                result.stats.predictionWeightUsed += predictionWeightTotal;
+                ++result.stats.weightedExpectedEvaluations;
             } else {
+                ++result.stats.uniformExpectedEvaluations;
                 // No supported prediction was successfully simulated.
                 // Use a uniform average over the valid selected responses.
                 for (const ResponseOutcome& outcome : outcomes) {
@@ -1044,7 +1064,8 @@ OpponentSearchResult searchTurnCandidates(
     const OpponentSearchOptions& options,
     SearchDeadline deadline
 ) {
-    return searchCore(
+    const SearchClock::time_point searchStartedAt = SearchClock::now();
+    OpponentSearchResult result = searchCore(
         board,
         candidates,
         actingSpecies,
@@ -1052,6 +1073,12 @@ OpponentSearchResult searchTurnCandidates(
         options,
         deadline
     );
+    result.stats.searchElapsedMicroseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            SearchClock::now() - searchStartedAt
+        ).count()
+    );
+    return result;
 }
 
 // -------------------------------------------------------------
@@ -1074,11 +1101,18 @@ OpponentSearchResult searchTurnCandidates(
         return result;
     }
 
+    const SearchClock::time_point predictionStartedAt = SearchClock::now();
     const OpponentPredictionResult predictions =
         predictOpponentBehaviour(
             board,
             history,
             currentTurn
+        );
+    const std::uint64_t predictionElapsedMicroseconds =
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                SearchClock::now() - predictionStartedAt
+            ).count()
         );
 
     if (deadlineReached(deadline)) {
@@ -1086,11 +1120,18 @@ OpponentSearchResult searchTurnCandidates(
         result.error = OpponentSearchError::NoValidSearchResults;
         result.timedOut = true;
         result.predictionError = predictions.error;
+        result.stats.predictionAttempted = true;
+        result.stats.predictionValid = predictions.valid();
+        result.stats.predictionError = predictions.error;
+        result.stats.predictionStats = predictions.stats;
+        result.stats.predictionElapsedMicroseconds =
+            predictionElapsedMicroseconds;
         return result;
     }
 
     if (predictions.valid()) {
-        return searchCore(
+        const SearchClock::time_point searchStartedAt = SearchClock::now();
+        OpponentSearchResult result = searchCore(
             board,
             candidates,
             actingSpecies,
@@ -1098,11 +1139,25 @@ OpponentSearchResult searchTurnCandidates(
             options,
             deadline
         );
+        result.stats.predictionAttempted = true;
+        result.stats.predictionValid = true;
+        result.stats.predictionError = OpponentPredictionError::None;
+        result.stats.predictionStats = predictions.stats;
+        result.stats.predictionElapsedMicroseconds =
+            predictionElapsedMicroseconds;
+        result.stats.searchElapsedMicroseconds =
+            static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    SearchClock::now() - searchStartedAt
+                ).count()
+            );
+        return result;
     }
 
     // Predictions can be unavailable early in a game or when
     // history is incomplete. Do not disable search entirely.
     // Fall back to tactical response selection.
+    const SearchClock::time_point searchStartedAt = SearchClock::now();
     OpponentSearchResult result =
         searchCore(
             board,
@@ -1113,7 +1168,18 @@ OpponentSearchResult searchTurnCandidates(
             deadline
         );
 
+    result.stats.searchElapsedMicroseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            SearchClock::now() - searchStartedAt
+        ).count()
+    );
     result.predictionError = predictions.error;
+    result.stats.predictionAttempted = true;
+    result.stats.predictionValid = false;
+    result.stats.predictionError = predictions.error;
+    result.stats.predictionStats = predictions.stats;
+    result.stats.predictionElapsedMicroseconds =
+        predictionElapsedMicroseconds;
     result.stats.predictionFallbackUsed = true;
 
     return result;

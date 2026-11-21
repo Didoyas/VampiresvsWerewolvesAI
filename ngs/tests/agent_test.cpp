@@ -41,7 +41,14 @@ void testAgentReturnsAValidatedPlanAndRecordsHistory() {
     assert(decision.turnNumber == 1);
     assert(decision.previousPlyWasUnknown);
     assert(!decision.crossPlyRestrictionsChecked);
+    assert(decision.historyUpdateAttempted);
     assert(decision.historyUpdated);
+    assert(decision.historyUpdateError == OpponentHistoryError::None);
+    assert(decision.historyObservationNumber == 1);
+    assert(decision.historySnapshotsRetained == 1);
+    assert(decision.confirmedMovementObservations == 0);
+    assert(!decision.opponentSearchStats.predictionAttempted);
+    assert(!decision.historyAwareSearchUsed);
     assert(decision.method == AgentDecisionMethod::CandidateFallback ||
            decision.method == AgentDecisionMethod::EmergencyFallback);
 
@@ -85,9 +92,46 @@ void testHistoryAdvancesAcrossUpdates() {
     const AgentDecision second = agent.chooseMove(board);
     assert(second.hasMove());
     assert(second.turnNumber == 2);
+    assert(second.historyUpdateAttempted);
     assert(second.historyUpdated);
+    assert(second.historyUpdateError == OpponentHistoryError::None);
+    assert(second.historyObservationNumber == 2);
+    assert(second.historySnapshotsRetained == 2);
+    assert(second.confirmedMovementObservations == 0);
+    assert(!second.opponentSearchStats.predictionAttempted);
     assert(agent.history().size() == 2);
     assert(agent.nextTurnNumber() == 3);
+}
+
+void testHistoryUpdateFailureIsObservable() {
+    BoardState board = makeBoard();
+    AgentOptions options;
+    options.searchBudget = std::chrono::milliseconds{0};
+    Agent agent(Species::Vampires, options);
+
+    const AgentDecision first = agent.chooseMove(board);
+    assert(first.hasMove());
+    assert(first.historyUpdated);
+
+    // A board dimension change violates the history's fixed-board invariant.
+    board.rows = 7;
+    board.columns = 7;
+    board.cells.assign(49, Cell{});
+    board.at({1, 1}).vampires = 10;
+    board.at({2, 1}).humans = 4;
+    board.at({4, 4}).werewolves = 4;
+    board.at({4, 3}).humans = 3;
+    board.at({4, 3}).isHouse = true;
+
+    const AgentDecision second = agent.chooseMove(board);
+    assert(second.hasMove());
+    assert(second.historyUpdateAttempted);
+    assert(!second.historyUpdated);
+    assert(second.historyUpdateError ==
+           OpponentHistoryError::BoardDimensionsChanged);
+    assert(second.historySnapshotsRetained == 1);
+    assert(second.confirmedMovementObservations == 0);
+    assert(!second.opponentSearchStats.predictionAttempted);
 }
 
 void testNoFriendlyGroupsReturnsNoLegalMove() {
@@ -118,6 +162,7 @@ void testInvalidBoardDoesNotRecordHistory() {
 
     assert(!decision.hasMove());
     assert(decision.method == AgentDecisionMethod::InvalidInput);
+    assert(!decision.historyUpdateAttempted);
     assert(agent.history().empty());
 }
 
@@ -126,6 +171,7 @@ void testInvalidBoardDoesNotRecordHistory() {
 int main() {
     testAgentReturnsAValidatedPlanAndRecordsHistory();
     testHistoryAdvancesAcrossUpdates();
+    testHistoryUpdateFailureIsObservable();
     testNoFriendlyGroupsReturnsNoLegalMove();
     testInvalidBoardDoesNotRecordHistory();
 

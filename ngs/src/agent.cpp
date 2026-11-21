@@ -228,9 +228,21 @@ AgentDecision Agent::chooseMove(
     // exact sources/destinations from sparse UPD cell snapshots; record only
     // what was actually observed.
     const std::uint32_t historyUpdateNumber = nextHistoryUpdateNumber_;
+    decision.historyObservationNumber = historyUpdateNumber;
+    const auto historyUpdateStartedAt = Clock::now();
     const HistoryUpdateResult historyUpdate =
         history_.recordObservation(board, historyUpdateNumber);
+    decision.historyUpdateMicroseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            Clock::now() - historyUpdateStartedAt
+        ).count()
+    );
+    decision.historyUpdateAttempted = true;
+    decision.historyUpdateError = historyUpdate.error;
     decision.historyUpdated = historyUpdate.valid();
+    decision.historySnapshotsRetained = history_.size();
+    decision.confirmedMovementObservations =
+        history_.confirmedMovements().size();
     if (decision.historyUpdated &&
         nextHistoryUpdateNumber_ < std::numeric_limits<std::uint32_t>::max()) {
         ++nextHistoryUpdateNumber_;
@@ -252,6 +264,7 @@ AgentDecision Agent::chooseMove(
     generationOptions.singleMoveOptions.requirePreviousPlyFootprint =
         board.previousPly.known;
 
+    const auto candidateGenerationStartedAt = Clock::now();
     const MultiMoveCandidateResult generated =
         generateMultiMoveCandidates(
             board,
@@ -259,6 +272,11 @@ AgentDecision Agent::chooseMove(
             generationOptions,
             deadline
         );
+    decision.candidateGenerationMicroseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            Clock::now() - candidateGenerationStartedAt
+        ).count()
+    );
 
     decision.deadlineExceeded =
         generated.timedOut || Clock::now() >= deadline;
@@ -290,7 +308,9 @@ AgentDecision Agent::chooseMove(
                 searchOptions,
                 deadline
             );
-            decision.historyAwareSearchUsed = search.stats.predictionsUsed;
+            decision.opponentSearchStats = search.stats;
+            decision.historyAwareSearchUsed =
+                search.stats.weightedExpectedEvaluations > 0;
         } else {
             search = searchTurnCandidates(
                 board,
@@ -299,6 +319,7 @@ AgentDecision Agent::chooseMove(
                 searchOptions,
                 deadline
             );
+            decision.opponentSearchStats = search.stats;
         }
 
         decision.deadlineExceeded =
