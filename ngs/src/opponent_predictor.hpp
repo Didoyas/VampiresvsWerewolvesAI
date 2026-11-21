@@ -35,6 +35,7 @@ struct PredictedDestination {
     double directionProbability{0.0};
     double destinationPresenceFrequency{0.0};
     double houseProgressScore{0.0};
+    double houseHistoryScore{0.0};
 
     // Weighted heuristic score, not a calibrated probability.
     double priorityScore{0.0};
@@ -51,9 +52,10 @@ struct OpponentPredictionOptions {
 
     std::size_t maxDestinationsPerGroup{3};
 
-    double directionWeight{0.45};
-    double destinationHistoryWeight{0.20};
-    double houseProgressWeight{0.35};
+    double directionWeight{0.405};
+    double destinationHistoryWeight{0.18};
+    double houseProgressWeight{0.315};
+    double houseHistoryWeight{0.10};
 
     // Apply the previous-ply source/destination restrictions
     // when BoardState contains a known previous-ply footprint.
@@ -79,6 +81,9 @@ struct OpponentPredictionStats {
     std::size_t destinationsRejectedByPreviousPly{0};
 
     std::size_t movementObservationsUsed{0};
+    // Number of current-house trends with a finite, positive risk score.
+    std::size_t houseTrendsAvailable{0};
+    std::size_t destinationsWithHouseHistorySupport{0};
     std::size_t destinationsRanked{0};
 };
 
@@ -110,6 +115,7 @@ struct OpponentPredictionResult {
 // 1. Recency-weighted confirmed movement directions.
 // 2. Historical occupancy of destination cells.
 // 3. Progress towards currently active human houses.
+// 4. Progress towards houses with an observed historical approach trend.
 //
 // It does not infer individual group identities or claim that
 // a predicted destination is a guaranteed future move.

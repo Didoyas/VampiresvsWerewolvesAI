@@ -60,7 +60,8 @@ Population opponentPopulation(
 
 bool validOptions(
     const OpponentPredictionOptions& options,
-    bool hasActiveHouses
+    bool hasActiveHouses,
+    bool hasHouseHistory
 ) noexcept {
     if (!std::isfinite(options.halfLifeTurns) ||
         options.halfLifeTurns <= 0.0) {
@@ -79,7 +80,8 @@ bool validOptions(
     const double weights[] = {
         options.directionWeight,
         options.destinationHistoryWeight,
-        options.houseProgressWeight
+        options.houseProgressWeight,
+        options.houseHistoryWeight
     };
 
     for (double weight : weights) {
@@ -91,7 +93,8 @@ bool validOptions(
     const double availableWeight =
         options.directionWeight +
         options.destinationHistoryWeight +
-        (hasActiveHouses ? options.houseProgressWeight : 0.0);
+        (hasActiveHouses ? options.houseProgressWeight : 0.0) +
+        (hasHouseHistory ? options.houseHistoryWeight : 0.0);
 
     return std::isfinite(availableWeight) &&
            availableWeight > 0.0;
@@ -271,6 +274,56 @@ double calculateHouseProgress(
         : 0.0;
 }
 
+// Uses the existing snapshot-derived house trends as a conservative target
+// preference. This does not infer an exact opponent movement. A candidate
+// receives support only when it moves closer to a currently active house
+// whose nearest-opponent distance has historically tended to decrease.
+double calculateHouseHistoryScore(
+    Position source,
+    Position destination,
+    const std::vector<HouseTrend>& trends,
+    int boardColumns
+) noexcept {
+    double bestScore = 0.0;
+
+    if (boardColumns <= 0) {
+        return bestScore;
+    }
+
+    for (const HouseTrend& trend : trends) {
+        if (!std::isfinite(trend.risk) || trend.risk <= 0.0) {
+            continue;
+        }
+
+        const std::size_t houseXIndex =
+            trend.cell_index % static_cast<std::size_t>(boardColumns);
+        const std::size_t houseYIndex =
+            trend.cell_index / static_cast<std::size_t>(boardColumns);
+
+        const int houseX = static_cast<int>(houseXIndex);
+        const int houseY = static_cast<int>(houseYIndex);
+
+        const int sourceDistance = chebyshevDistance(
+            source.x, source.y, houseX, houseY
+        );
+        const int destinationDistance = chebyshevDistance(
+            destination.x, destination.y, houseX, houseY
+        );
+
+        if (destinationDistance < sourceDistance) {
+            bestScore = std::max(
+                bestScore,
+                std::max(0.0, std::min(1.0, trend.risk))
+            );
+            if (bestScore >= 1.0) {
+                break;
+            }
+        }
+    }
+
+    return bestScore;
+}
+
 bool violatesPreviousPly(
     const BoardState& board,
     Position source,
@@ -299,8 +352,10 @@ double calculatePriorityScore(
     double directionProbability,
     double destinationPresenceFrequency,
     double houseProgressScore,
+    double houseHistoryScore,
     const OpponentPredictionOptions& options,
-    bool hasActiveHouses
+    bool hasActiveHouses,
+    bool hasHouseHistory
 ) noexcept {
     const double directionWeight =
         options.directionWeight;
@@ -313,15 +368,22 @@ double calculatePriorityScore(
             ? options.houseProgressWeight
             : 0.0;
 
+    const double houseHistoryWeight =
+        hasHouseHistory
+            ? options.houseHistoryWeight
+            : 0.0;
+
     const double totalWeight =
         directionWeight +
         destinationWeight +
-        houseWeight;
+        houseWeight +
+        houseHistoryWeight;
 
     return (
         directionWeight * directionProbability +
         destinationWeight * destinationPresenceFrequency +
-        houseWeight * houseProgressScore
+        houseWeight * houseProgressScore +
+        houseHistoryWeight * houseHistoryScore
     ) / totalWeight;
 }
 
@@ -407,13 +469,38 @@ OpponentPredictionResult predictOpponentBehaviour(
 
     const bool hasActiveHouses = !houses.empty();
 
-    if (!validOptions(options, hasActiveHouses)) {
+    // ---------------------------------------------------------
+    // Step 4: Retain snapshot-derived house approach information.
+    // ---------------------------------------------------------
+
+    result.houseTrends =
+        history.houseApproachTrends(opponentSpecies);
+
+    const bool hasHouseHistory = std::any_of(
+        result.houseTrends.begin(),
+        result.houseTrends.end(),
+        [](const HouseTrend& trend) {
+            return std::isfinite(trend.risk) && trend.risk > 0.0;
+        }
+    );
+
+    result.stats.houseTrendsAvailable = static_cast<std::size_t>(
+        std::count_if(
+            result.houseTrends.begin(),
+            result.houseTrends.end(),
+            [](const HouseTrend& trend) {
+                return std::isfinite(trend.risk) && trend.risk > 0.0;
+            }
+        )
+    );
+
+    if (!validOptions(options, hasActiveHouses, hasHouseHistory)) {
         result.error = OpponentPredictionError::InvalidOptions;
         return result;
     }
 
     // ---------------------------------------------------------
-    // Step 4: Derive direction statistics from confirmed moves.
+    // Step 5: Derive direction statistics from confirmed moves.
     // ---------------------------------------------------------
 
     result.stats.movementObservationsUsed =
@@ -425,13 +512,6 @@ OpponentPredictionResult predictOpponentBehaviour(
             currentTurn,
             options
         );
-
-    // ---------------------------------------------------------
-    // Step 5: Retain house approach information.
-    // ---------------------------------------------------------
-
-    result.houseTrends =
-        history.houseApproachTrends(opponentSpecies);
 
     // ---------------------------------------------------------
     // Step 6: Enumerate currently observed opponent groups.
@@ -533,6 +613,18 @@ OpponentPredictionResult predictOpponentBehaviour(
                         houses
                     );
 
+                const double houseHistoryScore =
+                    calculateHouseHistoryScore(
+                        source,
+                        destination,
+                        result.houseTrends,
+                        board.columns
+                    );
+
+                if (houseHistoryScore > 0.0) {
+                    ++result.stats.destinationsWithHouseHistorySupport;
+                }
+
                 // -------------------------------------------------
                 // Step 11: Combine the heuristic scores.
                 // -------------------------------------------------
@@ -555,13 +647,18 @@ OpponentPredictionResult predictOpponentBehaviour(
                 prediction.houseProgressScore =
                     houseProgress;
 
+                prediction.houseHistoryScore =
+                    houseHistoryScore;
+
                 prediction.priorityScore =
                     calculatePriorityScore(
                         directionProbability,
                         presenceFrequency,
                         houseProgress,
+                        houseHistoryScore,
                         options,
-                        hasActiveHouses
+                        hasActiveHouses,
+                        hasHouseHistory
                     );
 
                 groupPredictions.push_back(prediction);
