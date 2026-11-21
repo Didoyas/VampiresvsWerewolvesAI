@@ -117,6 +117,7 @@ void testGameHorizonIsCopied() {
 
     GameHorizon horizon;
 
+    horizon.known = true;
     horizon.ourPliesUsed = 10;
     horizon.opponentPliesUsed = 8;
     horizon.elapsedSeconds = 45.0;
@@ -124,6 +125,7 @@ void testGameHorizonIsCopied() {
     const BoardState board =
         adaptBoardState(view, PlyFootprint{}, horizon);
 
+    assert(board.horizon.known);
     assert(board.horizon.ourPliesUsed == 10);
     assert(board.horizon.opponentPliesUsed == 8);
     assert(board.horizon.elapsedSeconds == 45.0);

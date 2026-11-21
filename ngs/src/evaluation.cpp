@@ -327,6 +327,65 @@ bool validWeights(const EvaluationWeights& weights) noexcept {
            weights.fragmentation >= 0.0;
 }
 
+struct EffectiveEvaluationWeights {
+    double population{0.0};
+    double humanPotential{0.0};
+    double threatExposure{0.0};
+    double fragmentation{0.0};
+    double remainingHorizonFraction{1.0};
+    double endgameUrgency{0.0};
+    bool horizonAware{false};
+};
+
+EffectiveEvaluationWeights effectiveWeightsFor(
+    const BoardState& board,
+    const EvaluationWeights& base
+) noexcept {
+    EffectiveEvaluationWeights result;
+    result.population = base.population;
+    result.humanPotential = base.humanPotential;
+    result.threatExposure = base.threatExposure;
+    result.fragmentation = base.fragmentation;
+
+    // A default or malformed horizon must not silently masquerade as an
+    // early-game observation. Keep the exact legacy weights in that case.
+    if (!board.horizon.hasValidValues()) {
+        return result;
+    }
+
+    const double ourPliesRemaining =
+        static_cast<double>(board.horizon.ourPliesRemaining()) /
+        static_cast<double>(GameHorizon::kMaxPliesPerSide);
+    const double opponentPliesRemaining =
+        static_cast<double>(board.horizon.opponentPliesRemaining()) /
+        static_cast<double>(GameHorizon::kMaxPliesPerSide);
+    const double timeRemaining = std::clamp(
+        board.horizon.secondsRemaining() / GameHorizon::kMaxGameSeconds,
+        0.0,
+        1.0);
+
+    // Whichever limit is closest governs the effective planning horizon.
+    result.remainingHorizonFraction = std::clamp(
+        std::min({ourPliesRemaining, opponentPliesRemaining, timeRemaining}),
+        0.0,
+        1.0);
+    result.endgameUrgency = 1.0 - result.remainingHorizonFraction;
+    result.horizonAware = true;
+
+    // Smoothly pivot away from long-term expansion/positioning and toward
+    // immediate material and tactical safety as either game limit approaches.
+    result.population = base.population *
+        (1.0 + 0.50 * result.endgameUrgency);
+    result.humanPotential = base.humanPotential *
+        (1.0 - 0.75 * result.endgameUrgency);
+    result.threatExposure = base.threatExposure *
+        (1.0 + 0.40 * result.endgameUrgency);
+    result.fragmentation = base.fragmentation *
+        (1.0 - 0.50 * result.endgameUrgency);
+
+    return result;
+}
+
 } // namespace
 
 EvaluationResult evaluatePosition(
@@ -402,12 +461,27 @@ EvaluationResult evaluatePosition(
         result.features.opponentFragmentationPenalty -
         result.features.ownFragmentationPenalty;
 
+    const EffectiveEvaluationWeights effectiveWeights =
+        effectiveWeightsFor(board, weights);
+
+    result.features.horizonAware = effectiveWeights.horizonAware;
+    result.features.remainingHorizonFraction =
+        effectiveWeights.remainingHorizonFraction;
+    result.features.endgameUrgency = effectiveWeights.endgameUrgency;
+    result.features.effectivePopulationWeight = effectiveWeights.population;
+    result.features.effectiveHumanPotentialWeight =
+        effectiveWeights.humanPotential;
+    result.features.effectiveThreatExposureWeight =
+        effectiveWeights.threatExposure;
+    result.features.effectiveFragmentationWeight =
+        effectiveWeights.fragmentation;
+
     result.features.totalScore =
-        weights.population * result.features.populationAdvantage +
-        weights.humanPotential *
+        effectiveWeights.population * result.features.populationAdvantage +
+        effectiveWeights.humanPotential *
             result.features.humanPotentialAdvantage +
-        weights.threatExposure * result.features.threatAdvantage +
-        weights.fragmentation *
+        effectiveWeights.threatExposure * result.features.threatAdvantage +
+        effectiveWeights.fragmentation *
             result.features.fragmentationAdvantage;
 
     return result;

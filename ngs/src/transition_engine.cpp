@@ -432,6 +432,30 @@ void addUniquePosition(
     }
 }
 
+void incrementPliesUsed(std::uint16_t& pliesUsed) noexcept {
+    if (pliesUsed < GameHorizon::kMaxPliesPerSide) {
+        ++pliesUsed;
+    }
+}
+
+void advanceGameHorizon(
+    BoardState& state,
+    Species actingSpecies
+) noexcept {
+    GameHorizon& horizon = state.horizon;
+    if (!horizon.hasValidValues()) {
+        return;
+    }
+
+    if (actingSpecies == state.ourSpecies) {
+        incrementPliesUsed(horizon.ourPliesUsed);
+    } else if (actingSpecies == opponentOf(state.ourSpecies)) {
+        incrementPliesUsed(horizon.opponentPliesUsed);
+    }
+    // elapsedSeconds is wall-clock observation data. Simulated plies do not
+    // consume real game time, so it is deliberately left unchanged.
+}
+
 } // namespace
 
 
@@ -626,7 +650,11 @@ TransitionResult applyTurnPlan(
         );
     }
 
-    // 8. Construct successful result.
+    // 8. Advance the simulated side-to-move count only after the full turn
+    // has resolved successfully. The counter is relative to board.ourSpecies.
+    advanceGameHorizon(nextState, actingSpecies);
+
+    // 9. Construct successful result.
     TransitionResult result;
     result.nextState = std::move(nextState);
     result.stats = stats;

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "vvw/game/decision_engine_factory.hpp"
+#include "vvw/game/game_horizon_tracker.hpp"
 
 #include <memory>
 
@@ -49,11 +50,6 @@ static void logTx(const std::string& message) {
 static void logRx(const std::string& message) {
     std::cerr << "[RX]   " << message << '\n';
 }
-
-// The local UPD-to-MOV processing target. This is deliberately below the
-// server's 2-second response limit to leave margin for outbound network delay
-// and runtime variability; it is not itself a hard real-time guarantee.
-static constexpr std::chrono::milliseconds kLocalTurnResponseBudget{1500};
 
 // -----------------------------------------------------------------------------
 // Protocol data types
@@ -564,7 +560,10 @@ static vvw::game::Species toGameSpecies(Species species) {
     return vvw::game::Species::Unknown;
 }
 
-static vvw::game::BoardState toGameBoardState(const GameState& state) {
+static vvw::game::BoardState toGameBoardState(
+    const GameState& state,
+    const vvw::game::GameHorizon& horizon = {}
+) {
     if (state.rows() == 0 || state.columns() == 0) {
         throw std::runtime_error("Cannot convert an uninitialized game board");
     }
@@ -573,6 +572,7 @@ static vvw::game::BoardState toGameBoardState(const GameState& state) {
     board.rows = static_cast<int>(state.rows());
     board.columns = static_cast<int>(state.columns());
     board.ourSpecies = toGameSpecies(state.ourSpecies());
+    board.horizon = horizon;
     board.cells.resize(
         static_cast<std::size_t>(board.rows) *
         static_cast<std::size_t>(board.columns)
@@ -719,6 +719,10 @@ static void playConnection(ClientSocket& client) {
         logInfo("Decision engine initialized; initial MAP board supplied");
         logInfo("Previous opponent MOV footprint is not present in UPD; the client marks it unknown");
 
+        // The initial MAP precedes the game clock. The tracker starts from the
+        // first UPD and uses the verified alternating-turn update sequence.
+        vvw::game::GameHorizonTracker horizonTracker;
+
         while (true) {
             Message message = client.readMessage();
 
@@ -737,14 +741,12 @@ static void playConnection(ClientSocket& client) {
                 // includes network transit time, which the client cannot know
                 // exactly from this side of the TCP connection.
                 const auto receivedAt = std::chrono::steady_clock::now();
-                const vvw::game::DecisionDeadline decisionDeadline =
-                    receivedAt + kLocalTurnResponseBudget;
-
                 state.apply(message);
+                horizonTracker.observeUpdate(message.updates.size(), receivedAt);
 
-                const vvw::game::BoardState board = toGameBoardState(state);
-                const vvw::game::TurnPlan plan =
-                    engine->chooseMove(board, decisionDeadline);
+                const vvw::game::BoardState board = toGameBoardState(
+                    state, horizonTracker.snapshot(receivedAt));
+                const vvw::game::TurnPlan plan = engine->chooseMove(board);
 
                 // The game protocol does not define an empty MOV as a legal
                 // pass. Refuse to send it rather than leaving the server
@@ -760,17 +762,13 @@ static void playConnection(ClientSocket& client) {
                 logInfo("Decision engine produced " + std::to_string(moves.size()) +
                         " move(s)");
                 client.sendMoves(moves);
+                horizonTracker.recordOurMoveSent();
                 const auto sentAt = std::chrono::steady_clock::now();
                 const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     sentAt - receivedAt).count();
 
-                const bool withinLocalBudget = sentAt <= decisionDeadline;
-                std::cerr << "[TIMING] UPD-complete-to-MOV-send=" << elapsedMs
-                          << " ms; local budget="
-                          << kLocalTurnResponseBudget.count()
-                          << " ms; status="
-                          << (withinLocalBudget ? "WITHIN_BUDGET" : "BUDGET_EXCEEDED")
-                          << " (does not include waiting for or decoding the UPD packet)\n";
+                std::cerr << "[TIMING] Decision and MOV-send processing=" << elapsedMs
+                          << " ms (does not include waiting for or decoding the UPD packet)\n";
                 continue;
             }
 

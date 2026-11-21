@@ -401,6 +401,90 @@ void testCurrentPlyFootprintIsRecorded() {
 // Validation failures
 // -----------------------------------------------------------------------------
 
+
+void testSuccessfulOwnPlyAdvancesOwnCounter() {
+    BoardState board = createTestBoard();
+    board.horizon.known = true;
+    board.horizon.ourPliesUsed = 7;
+    board.horizon.opponentPliesUsed = 6;
+    board.horizon.elapsedSeconds = 25.0;
+    board.at({1, 1}).vampires = 10;
+
+    std::mt19937 rng(42);
+    const auto result = applyTurnPlan(
+        board, createPlan({1, 1}, 5, {2, 1}),
+        Species::Vampires, rng);
+
+    assert(result.valid());
+    assert(result.nextState.horizon.ourPliesUsed == 8);
+    assert(result.nextState.horizon.opponentPliesUsed == 6);
+    assert(result.nextState.horizon.elapsedSeconds == 25.0);
+    assert(board.horizon.ourPliesUsed == 7);
+}
+
+void testSuccessfulOpponentPlyAdvancesOpponentCounter() {
+    BoardState board = createTestBoard();
+    board.horizon.known = true;
+    board.horizon.ourPliesUsed = 4;
+    board.horizon.opponentPliesUsed = 3;
+    board.at({1, 1}).werewolves = 10;
+
+    TurnPlan plan = createPlan({1, 1}, 5, {2, 1});
+    std::mt19937 rng(42);
+    const auto result = applyTurnPlan(
+        board, plan, Species::Werewolves, rng);
+
+    assert(result.valid());
+    assert(result.nextState.horizon.ourPliesUsed == 4);
+    assert(result.nextState.horizon.opponentPliesUsed == 4);
+}
+
+void testUnknownHorizonRemainsUnknownDuringSimulation() {
+    BoardState board = createTestBoard();
+    board.at({1, 1}).vampires = 10;
+
+    std::mt19937 rng(42);
+    const auto result = applyTurnPlan(
+        board, createPlan({1, 1}, 5, {2, 1}),
+        Species::Vampires, rng);
+
+    assert(result.valid());
+    assert(!result.nextState.horizon.known);
+    assert(result.nextState.horizon.ourPliesUsed == 0);
+    assert(result.nextState.horizon.opponentPliesUsed == 0);
+}
+
+void testFailedTransitionDoesNotAdvanceHorizon() {
+    BoardState board = createTestBoard();
+    board.horizon.known = true;
+    board.horizon.ourPliesUsed = 12;
+    board.at({1, 1}).vampires = 0;
+
+    std::mt19937 rng(42);
+    const auto result = applyTurnPlan(
+        board, createPlan({1, 1}, 5, {2, 1}),
+        Species::Vampires, rng);
+
+    assert(!result.valid());
+    assert(board.horizon.ourPliesUsed == 12);
+}
+
+void testHorizonCounterSaturatesAtPerSideLimit() {
+    BoardState board = createTestBoard();
+    board.horizon.known = true;
+    board.horizon.ourPliesUsed = GameHorizon::kMaxPliesPerSide;
+    board.at({1, 1}).vampires = 10;
+
+    std::mt19937 rng(42);
+    const auto result = applyTurnPlan(
+        board, createPlan({1, 1}, 5, {2, 1}),
+        Species::Vampires, rng);
+
+    assert(result.valid());
+    assert(result.nextState.horizon.ourPliesUsed ==
+           GameHorizon::kMaxPliesPerSide);
+}
+
 void testInvalidPlanIsRejected() {
     BoardState board = createTestBoard();
 
@@ -483,6 +567,11 @@ int main() {
     testMultipleGroupsArrivingAtSameDestination();
 
     testCurrentPlyFootprintIsRecorded();
+    testSuccessfulOwnPlyAdvancesOwnCounter();
+    testSuccessfulOpponentPlyAdvancesOpponentCounter();
+    testUnknownHorizonRemainsUnknownDuringSimulation();
+    testFailedTransitionDoesNotAdvanceHorizon();
+    testHorizonCounterSaturatesAtPerSideLimit();
 
     testInvalidPlanIsRejected();
     testUnknownPreviousFootprintIsRejectedByDefault();

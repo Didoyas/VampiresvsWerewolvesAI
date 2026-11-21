@@ -47,6 +47,16 @@ struct EvaluationFeatures {
     double ownFragmentationPenalty{0.0};
     double opponentFragmentationPenalty{0.0};
 
+    // Horizon diagnostics. When horizonAware is false, the board supplied no
+    // valid horizon and the evaluator uses the caller's original weights.
+    bool horizonAware{false};
+    double remainingHorizonFraction{1.0};
+    double endgameUrgency{0.0};
+    double effectivePopulationWeight{0.0};
+    double effectiveHumanPotentialWeight{0.0};
+    double effectiveThreatExposureWeight{0.0};
+    double effectiveFragmentationWeight{0.0};
+
     double totalScore{0.0};
 };
 

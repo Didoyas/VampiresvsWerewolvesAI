@@ -28,6 +28,7 @@ add_library(vvws_ngs STATIC
     ../ngs/src/opponent_history.cpp
     ../ngs/src/opponent_predictor.cpp
     ../ngs/src/opponent_search.cpp
+    ../ngs/src/state_adapter.cpp
 )
 
 target_compile_features(vvws_ngs PUBLIC cxx_std_17)
@@ -150,6 +151,37 @@ if(BUILD_TESTING)
     target_compile_features(vvws_opponent_search_test PRIVATE cxx_std_17)
     vvw_enable_warnings(vvws_opponent_search_test)
 
+    # Horizon-aware position evaluation and simulated turn accounting.
+    add_executable(vvws_evaluation_test
+        ../ngs/tests/evaluation_test.cpp
+    )
+    target_link_libraries(vvws_evaluation_test PRIVATE vvws_ngs)
+    target_compile_features(vvws_evaluation_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_evaluation_test)
+
+    add_executable(vvws_transition_engine_test
+        ../ngs/tests/transition_engine_test.cpp
+    )
+    target_link_libraries(vvws_transition_engine_test PRIVATE vvws_ngs)
+    target_compile_features(vvws_transition_engine_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_transition_engine_test)
+
+    add_executable(vvws_state_adapter_test
+        ../ngs/tests/state_adapter_test.cpp
+    )
+    target_link_libraries(vvws_state_adapter_test PRIVATE vvws_ngs)
+    target_compile_features(vvws_state_adapter_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_state_adapter_test)
+
+    add_executable(vvws_game_horizon_tracker_test
+        ../ngs/tests/game_horizon_tracker_test.cpp
+    )
+    target_include_directories(vvws_game_horizon_tracker_test PRIVATE
+        "${VVW_COMMON_INCLUDE_DIR}"
+    )
+    target_compile_features(vvws_game_horizon_tracker_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_game_horizon_tracker_test)
+
     # Assertions must remain active in Release builds for these unit tests.
     foreach(test_target IN ITEMS
         vvws_decision_engine_contract_test
@@ -161,6 +193,10 @@ if(BUILD_TESTING)
         vvws_multi_move_candidate_generator_test
         vvws_opponent_predictor_test
         vvws_opponent_search_test
+        vvws_evaluation_test
+        vvws_transition_engine_test
+        vvws_state_adapter_test
+        vvws_game_horizon_tracker_test
     )
         if(MSVC)
             target_compile_options(${test_target} PRIVATE /UNDEBUG)
@@ -207,6 +243,22 @@ if(BUILD_TESTING)
         NAME opponent_search_unit
         COMMAND vvws_opponent_search_test
     )
+    add_test(
+        NAME evaluation_unit
+        COMMAND vvws_evaluation_test
+    )
+    add_test(
+        NAME transition_engine_unit
+        COMMAND vvws_transition_engine_test
+    )
+    add_test(
+        NAME state_adapter_unit
+        COMMAND vvws_state_adapter_test
+    )
+    add_test(
+        NAME game_horizon_tracker_unit
+        COMMAND vvws_game_horizon_tracker_test
+    )
 
     set_tests_properties(
         decision_engine_contract_unit
@@ -218,6 +270,10 @@ if(BUILD_TESTING)
         multi_move_candidate_generator_unit
         opponent_predictor_unit
         opponent_search_unit
+        evaluation_unit
+        transition_engine_unit
+        state_adapter_unit
+        game_horizon_tracker_unit
         PROPERTIES TIMEOUT 30
     )
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
 #include <cstddef>
 #include <stdexcept>
 #include <vector>
@@ -78,9 +79,17 @@ struct GameHorizon {
     static constexpr std::uint16_t kMaxPliesPerSide = 100;
     static constexpr double kMaxGameSeconds = 300.0;
 
+    // False until the client has received its first in-game UPD and can
+    // establish a turn/time baseline. Unknown horizons preserve legacy scoring.
     std::uint16_t ourPliesUsed{0};
     std::uint16_t opponentPliesUsed{0};
     double elapsedSeconds{0.0};
+    // Appended to preserve the original aggregate-initialization field order.
+    bool known{false};
+
+    bool hasValidValues() const noexcept {
+        return known && std::isfinite(elapsedSeconds) && elapsedSeconds >= 0.0;
+    }
 
     std::uint16_t ourPliesRemaining() const noexcept {
         return ourPliesUsed >= kMaxPliesPerSide
@@ -97,15 +106,17 @@ struct GameHorizon {
     }
 
     double secondsRemaining() const noexcept {
-        return elapsedSeconds >= kMaxGameSeconds
-            ? 0.0
-            : kMaxGameSeconds - std::max(0.0, elapsedSeconds);
+        if (!std::isfinite(elapsedSeconds)) {
+            return 0.0;
+        }
+        return std::max(0.0, kMaxGameSeconds - std::max(0.0, elapsedSeconds));
     }
 
     bool isTerminalByLimit() const noexcept {
-        return ourPliesRemaining() == 0 ||
-               opponentPliesRemaining() == 0 ||
-               secondsRemaining() <= 0.0;
+        return hasValidValues() &&
+               (ourPliesRemaining() == 0 ||
+                opponentPliesRemaining() == 0 ||
+                secondsRemaining() <= 0.0);
     }
 };
 

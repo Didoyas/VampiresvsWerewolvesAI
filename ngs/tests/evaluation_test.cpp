@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 using namespace vvw::ngs;
 
@@ -163,6 +164,114 @@ void testSmallDisconnectedGroupGetsFragmentationPenalty() {
     assert(consolidated.features.ownFragmentationPenalty == 0.0);
 }
 
+
+void testUnknownHorizonPreservesLegacyWeights() {
+    BoardState board = makeBoard(2, 2);
+    cell(board, 0, 0).vampires = 10;
+    cell(board, 1, 1).werewolves = 4;
+
+    EvaluationWeights weights;
+    weights.humanPotential = 0.0;
+    weights.threatExposure = 0.0;
+    weights.fragmentation = 0.0;
+
+    const auto result = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves, weights);
+
+    assert(result.valid());
+    assert(!result.features.horizonAware);
+    assert(result.features.endgameUrgency == 0.0);
+    assert(result.features.effectivePopulationWeight == weights.population);
+    assert(result.features.totalScore == 6.0);
+}
+
+void testEarlyHorizonKeepsBaseWeights() {
+    BoardState board = makeBoard(2, 2);
+    board.horizon.known = true;
+    board.horizon.elapsedSeconds = 0.0;
+    board.horizon.ourPliesUsed = 0;
+    board.horizon.opponentPliesUsed = 0;
+
+    const auto result = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves);
+
+    assert(result.valid());
+    assert(result.features.horizonAware);
+    assert(result.features.remainingHorizonFraction == 1.0);
+    assert(result.features.endgameUrgency == 0.0);
+    assert(result.features.effectivePopulationWeight == 1.0);
+    assert(result.features.effectiveHumanPotentialWeight == 0.35);
+    assert(result.features.effectiveThreatExposureWeight == 1.0);
+    assert(result.features.effectiveFragmentationWeight == 0.20);
+}
+
+void testEndgameHorizonPrioritizesMaterialAndThreat() {
+    BoardState board = makeBoard(2, 2);
+    board.horizon.known = true;
+    board.horizon.ourPliesUsed = GameHorizon::kMaxPliesPerSide;
+    board.horizon.opponentPliesUsed = GameHorizon::kMaxPliesPerSide;
+    board.horizon.elapsedSeconds = 120.0;
+
+    const auto result = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves);
+
+    assert(result.valid());
+    assert(result.features.horizonAware);
+    assert(result.features.remainingHorizonFraction == 0.0);
+    assert(result.features.endgameUrgency == 1.0);
+    assert(result.features.effectivePopulationWeight == 1.5);
+    assert(result.features.effectiveHumanPotentialWeight == 0.0875);
+    assert(result.features.effectiveThreatExposureWeight == 1.4);
+    assert(result.features.effectiveFragmentationWeight == 0.10);
+}
+
+void testTimeLimitAlsoTriggersEndgameAdaptation() {
+    BoardState board = makeBoard(2, 2);
+    board.horizon.known = true;
+    board.horizon.ourPliesUsed = 10;
+    board.horizon.opponentPliesUsed = 10;
+    board.horizon.elapsedSeconds = 300.0;
+
+    const auto result = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves);
+
+    assert(result.valid());
+    assert(result.features.horizonAware);
+    assert(result.features.endgameUrgency == 1.0);
+}
+
+void testInvalidHorizonFallsBackWithoutNan() {
+    BoardState board = makeBoard(2, 2);
+    board.horizon.known = true;
+    board.horizon.elapsedSeconds = std::numeric_limits<double>::quiet_NaN();
+
+    const auto result = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves);
+
+    assert(result.valid());
+    assert(!result.features.horizonAware);
+    assert(result.features.endgameUrgency == 0.0);
+    assert(std::isfinite(result.features.totalScore));
+}
+
+void testHorizonCountersBeyondLimitsAreClampedSafely() {
+    BoardState board = makeBoard(2, 2);
+    board.horizon.known = true;
+    board.horizon.ourPliesUsed = static_cast<std::uint16_t>(
+        GameHorizon::kMaxPliesPerSide + 5);
+    board.horizon.opponentPliesUsed = static_cast<std::uint16_t>(
+        GameHorizon::kMaxPliesPerSide + 2);
+    board.horizon.elapsedSeconds = 100.0;
+
+    const auto result = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves);
+
+    assert(result.valid());
+    assert(result.features.horizonAware);
+    assert(result.features.endgameUrgency == 1.0);
+    assert(std::isfinite(result.features.totalScore));
+}
+
 void testInvalidWeights() {
     BoardState board = makeBoard(2, 2);
     EvaluationWeights weights;
@@ -184,6 +293,12 @@ int main() {
     testThreatSignDependsOnSideToMove();
     testPreviousPlyFootprintBlocksThreatEstimate();
     testSmallDisconnectedGroupGetsFragmentationPenalty();
+    testUnknownHorizonPreservesLegacyWeights();
+    testEarlyHorizonKeepsBaseWeights();
+    testEndgameHorizonPrioritizesMaterialAndThreat();
+    testTimeLimitAlsoTriggersEndgameAdaptation();
+    testInvalidHorizonFallsBackWithoutNan();
+    testHorizonCountersBeyondLimitsAreClampedSafely();
     testInvalidWeights();
 
     std::cout << "All evaluation tests passed.\n";
