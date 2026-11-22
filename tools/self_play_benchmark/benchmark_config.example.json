@@ -1,0 +1,20 @@
+{
+  "server_exe": "C:/VVW/server/VampiresVSWerewolvesGameServer.exe",
+  "client_a": [
+    "C:/VVW/clients/baseline/vvws_client.exe",
+    "127.0.0.1",
+    "5555"
+  ],
+  "client_b": [
+    "C:/VVW/clients/candidate/vvws_client.exe",
+    "127.0.0.1",
+    "5555"
+  ],
+  "games": 2,
+  "output_dir": "./benchmark_results",
+  "alternate_connection_order": true,
+  "startup_delay_seconds": 2.0,
+  "inter_client_delay_seconds": 0.25,
+  "server_timeout_seconds": 330,
+  "client_exit_grace_seconds": 10
+}
