@@ -112,6 +112,28 @@ double calculateHumanPotential(
     return potential;
 }
 
+// Houses are strategic objectives, not interchangeable with ordinary
+// human cells. This feature values their accessibility from both sides.
+double calculateHousePotential(
+    const BoardState& board,
+    const std::vector<int>& distance
+) noexcept {
+    double potential = 0.0;
+
+    for (std::size_t i = 0; i < board.cells.size(); ++i) {
+        const Cell& cell = board.cells[i];
+        if (!cell.isHouse || cell.humans == 0 || distance[i] < 0) {
+            continue;
+        }
+
+        const double closeness =
+            1.0 / (1.0 + static_cast<double>(distance[i]));
+        potential += static_cast<double>(cell.humans) * closeness;
+    }
+
+    return potential;
+}
+
 // Returns the sum of populations in disconnected components that are below
 // the configured useful-group threshold. Components use eight-neighbour
 // connectivity because diagonal movement is allowed by the game.
@@ -319,10 +341,12 @@ double calculateExpectedThreatenedPopulation(
 bool validWeights(const EvaluationWeights& weights) noexcept {
     return std::isfinite(weights.population) &&
            std::isfinite(weights.humanPotential) &&
+           std::isfinite(weights.housePotential) &&
            std::isfinite(weights.threatExposure) &&
            std::isfinite(weights.fragmentation) &&
            weights.population >= 0.0 &&
            weights.humanPotential >= 0.0 &&
+           weights.housePotential >= 0.0 &&
            weights.threatExposure >= 0.0 &&
            weights.fragmentation >= 0.0;
 }
@@ -330,6 +354,7 @@ bool validWeights(const EvaluationWeights& weights) noexcept {
 struct EffectiveEvaluationWeights {
     double population{0.0};
     double humanPotential{0.0};
+    double housePotential{0.0};
     double threatExposure{0.0};
     double fragmentation{0.0};
     double remainingHorizonFraction{1.0};
@@ -344,6 +369,7 @@ EffectiveEvaluationWeights effectiveWeightsFor(
     EffectiveEvaluationWeights result;
     result.population = base.population;
     result.humanPotential = base.humanPotential;
+    result.housePotential = base.housePotential;
     result.threatExposure = base.threatExposure;
     result.fragmentation = base.fragmentation;
 
@@ -377,6 +403,8 @@ EffectiveEvaluationWeights effectiveWeightsFor(
     result.population = base.population *
         (1.0 + 0.50 * result.endgameUrgency);
     result.humanPotential = base.humanPotential *
+        (1.0 - 0.75 * result.endgameUrgency);
+    result.housePotential = base.housePotential *
         (1.0 - 0.75 * result.endgameUrgency);
     result.threatExposure = base.threatExposure *
         (1.0 + 0.40 * result.endgameUrgency);
@@ -440,6 +468,14 @@ EvaluationResult evaluatePosition(
         result.features.ownHumanPotential -
         result.features.opponentHumanPotential;
 
+    result.features.ownHousePotential =
+        calculateHousePotential(board, ownDistances);
+    result.features.opponentHousePotential =
+        calculateHousePotential(board, opponentDistances);
+    result.features.housePotentialAdvantage =
+        result.features.ownHousePotential -
+        result.features.opponentHousePotential;
+
     result.features.expectedThreatenedPopulation =
         calculateExpectedThreatenedPopulation(board, sideToMove);
     result.features.threatAdvantage =
@@ -471,6 +507,8 @@ EvaluationResult evaluatePosition(
     result.features.effectivePopulationWeight = effectiveWeights.population;
     result.features.effectiveHumanPotentialWeight =
         effectiveWeights.humanPotential;
+    result.features.effectiveHousePotentialWeight =
+        effectiveWeights.housePotential;
     result.features.effectiveThreatExposureWeight =
         effectiveWeights.threatExposure;
     result.features.effectiveFragmentationWeight =
@@ -480,6 +518,8 @@ EvaluationResult evaluatePosition(
         effectiveWeights.population * result.features.populationAdvantage +
         effectiveWeights.humanPotential *
             result.features.humanPotentialAdvantage +
+        effectiveWeights.housePotential *
+            result.features.housePotentialAdvantage +
         effectiveWeights.threatExposure * result.features.threatAdvantage +
         effectiveWeights.fragmentation *
             result.features.fragmentationAdvantage;

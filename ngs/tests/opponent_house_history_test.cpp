@@ -142,6 +142,37 @@ void testZeroRiskHouseTrendsDoNotDiluteExistingSignals() {
     }
 }
 
+void testNoConfirmedMovementsDoNotDiluteStrategicHouseProgress() {
+    OpponentHistory history(Species::Werewolves);
+    BoardState current = makeBoard();
+    current.at({2, 3}).werewolves = 9;
+    assert(history.recordObservation(current, 1).valid());
+
+    OpponentPredictionOptions options;
+    options.directionWeight = 1.0;
+    options.destinationHistoryWeight = 0.0;
+    options.houseProgressWeight = 1.0;
+    options.houseHistoryWeight = 0.0;
+    options.maxDestinationsPerGroup = 8;
+
+    const OpponentPredictionResult result =
+        predictOpponentBehaviour(current, history, 1, options);
+
+    assert(result.valid());
+    assert(result.stats.movementObservationsUsed == 0);
+    assert(!result.stats.directionEvidenceUsed);
+
+    const PredictedDestination* towardHouse =
+        findPrediction(result, {2, 3}, {3, 3});
+    const PredictedDestination* awayOrSideways =
+        findPrediction(result, {2, 3}, {1, 4});
+
+    assert(towardHouse != nullptr);
+    assert(awayOrSideways != nullptr);
+    assert(std::abs(towardHouse->priorityScore - 1.0) < 1e-9);
+    assert(std::abs(awayOrSideways->priorityScore) < 1e-9);
+}
+
 void testInvalidHouseHistoryWeightIsRejected() {
     OpponentHistory history(Species::Werewolves);
     BoardState board = makeBoard();
@@ -164,6 +195,7 @@ int main() {
     testHistoricalHouseApproachInfluencesDestinationPriority();
     testOneSnapshotDoesNotCreateHouseHistoryEvidence();
     testZeroRiskHouseTrendsDoNotDiluteExistingSignals();
+    testNoConfirmedMovementsDoNotDiluteStrategicHouseProgress();
     testInvalidHouseHistoryWeightIsRejected();
 
     std::cout << "All opponent house-history integration tests passed.\n";

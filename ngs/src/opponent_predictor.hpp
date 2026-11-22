@@ -81,6 +81,7 @@ struct OpponentPredictionStats {
     std::size_t destinationsRejectedByPreviousPly{0};
 
     std::size_t movementObservationsUsed{0};
+    bool directionEvidenceUsed{false};
     // Number of current-house trends with a finite, positive risk score.
     std::size_t houseTrendsAvailable{0};
     std::size_t destinationsWithHouseHistorySupport{0};

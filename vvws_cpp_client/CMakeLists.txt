@@ -151,6 +151,14 @@ if(BUILD_TESTING)
     target_compile_features(vvws_opponent_search_test PRIVATE cxx_std_17)
     vvw_enable_warnings(vvws_opponent_search_test)
 
+    # Snapshot-derived opponent house-target preference tests.
+    add_executable(vvws_opponent_house_history_test
+        ../ngs/tests/opponent_house_history_test.cpp
+    )
+    target_link_libraries(vvws_opponent_house_history_test PRIVATE vvws_ngs)
+    target_compile_features(vvws_opponent_house_history_test PRIVATE cxx_std_17)
+    vvw_enable_warnings(vvws_opponent_house_history_test)
+
     # Horizon-aware position evaluation and simulated turn accounting.
     add_executable(vvws_evaluation_test
         ../ngs/tests/evaluation_test.cpp
@@ -193,6 +201,7 @@ if(BUILD_TESTING)
         vvws_multi_move_candidate_generator_test
         vvws_opponent_predictor_test
         vvws_opponent_search_test
+        vvws_opponent_house_history_test
         vvws_evaluation_test
         vvws_transition_engine_test
         vvws_state_adapter_test
@@ -244,6 +253,10 @@ if(BUILD_TESTING)
         COMMAND vvws_opponent_search_test
     )
     add_test(
+        NAME opponent_house_history_unit
+        COMMAND vvws_opponent_house_history_test
+    )
+    add_test(
         NAME evaluation_unit
         COMMAND vvws_evaluation_test
     )
@@ -270,6 +283,7 @@ if(BUILD_TESTING)
         multi_move_candidate_generator_unit
         opponent_predictor_unit
         opponent_search_unit
+        opponent_house_history_unit
         evaluation_unit
         transition_engine_unit
         state_adapter_unit

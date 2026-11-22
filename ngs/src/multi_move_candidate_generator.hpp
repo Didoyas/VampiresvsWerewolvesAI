@@ -1,15 +1,16 @@
+
 #pragma once
 
 #include "candidate_generator.hpp"
 #include "search_deadline.hpp"
-#include "vvw/game/types.hpp"
+
 #include <cstddef>
 #include <vector>
 
 namespace vvw::ngs {
 
 // Stage 2 builds complete turn candidates by combining one Stage 1 movement
-// from each of two or three distinct source cells.
+// from each of two, three, or four distinct source cells.
 //
 // This deliberately does not split one source group across multiple
 // destinations. That extension can be added separately after this bounded
@@ -18,10 +19,10 @@ struct MultiMoveCandidateOptions {
     CandidateGenerationOptions singleMoveOptions{};
 
     // Keep the branching factor small enough for the later search layer.
-    // Supported values are 2 or 3.
+    // Supported values are 2, 3, or 4.
     std::size_t maxMovesPerPlan{3};
 
-    // Per-depth quotas. Zero disables that candidate class.
+    // Per-plan-size quotas. Zero disables that candidate class.
     std::size_t maxSingleMoveCandidates{48};
     std::size_t maxTwoMoveCandidates{128};
     std::size_t maxThreeMoveCandidates{64};
@@ -48,8 +49,7 @@ enum class MultiMoveCandidateError {
 struct MultiMoveCandidateStats {
     std::size_t singleMoveCandidatesAvailable{0};
     std::size_t sourceGroupsAvailable{0};
-    // Generates a bounded portfolio containing single-, two-, three- and
-    // optionally four-movement plans. Every returned plan is validated.
+
     std::size_t singleMoveCandidatesIncluded{0};
     std::size_t twoMoveCandidatesGenerated{0};
     std::size_t threeMoveCandidatesGenerated{0};
@@ -65,6 +65,7 @@ struct MultiMoveCandidateResult {
     MultiMoveCandidateError error{MultiMoveCandidateError::None};
     std::vector<TurnPlan> candidates;
     MultiMoveCandidateStats stats;
+
     // Partial candidates remain valid when generation reaches the deadline.
     bool timedOut{false};
 
@@ -73,8 +74,9 @@ struct MultiMoveCandidateResult {
     }
 };
 
-// Generates a bounded portfolio containing single-, two- and (optionally)
-// three-movement plans. Every returned plan is checked by validateTurnPlan().
+// Generates a bounded portfolio containing single-, two-, three-, and
+// optionally four-movement plans. Every returned compound plan is checked
+// by validateTurnPlan().
 MultiMoveCandidateResult generateMultiMoveCandidates(
     const BoardState& board,
     Species actingSpecies,

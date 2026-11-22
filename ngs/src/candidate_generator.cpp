@@ -196,14 +196,6 @@ CandidateGenerationResult generateSingleMoveCandidates(
                         } else {
                             ++result.stats.candidatesRejectedByValidator;
                         }
-
-                        // Validation is a bounded but non-preemptible call.
-                        // Preserve its result, then stop before examining the
-                        // next candidate if it consumed the remaining budget.
-                        if (deadlineReached(deadline)) {
-                            result.timedOut = true;
-                            break;
-                        }
                     }
                 }
                 if (result.timedOut) {

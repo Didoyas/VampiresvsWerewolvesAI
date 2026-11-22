@@ -61,7 +61,8 @@ Population opponentPopulation(
 bool validOptions(
     const OpponentPredictionOptions& options,
     bool hasActiveHouses,
-    bool hasHouseHistory
+    bool hasHouseHistory,
+    bool hasMovementEvidence
 ) noexcept {
     if (!std::isfinite(options.halfLifeTurns) ||
         options.halfLifeTurns <= 0.0) {
@@ -91,7 +92,7 @@ bool validOptions(
     }
 
     const double availableWeight =
-        options.directionWeight +
+        (hasMovementEvidence ? options.directionWeight : 0.0) +
         options.destinationHistoryWeight +
         (hasActiveHouses ? options.houseProgressWeight : 0.0) +
         (hasHouseHistory ? options.houseHistoryWeight : 0.0);
@@ -355,10 +356,12 @@ double calculatePriorityScore(
     double houseHistoryScore,
     const OpponentPredictionOptions& options,
     bool hasActiveHouses,
-    bool hasHouseHistory
+    bool hasHouseHistory,
+    bool hasMovementEvidence
 ) noexcept {
+    // Do not treat Laplace-smoothed uniform directions as behavioural evidence.
     const double directionWeight =
-        options.directionWeight;
+        hasMovementEvidence ? options.directionWeight : 0.0;
 
     const double destinationWeight =
         options.destinationHistoryWeight;
@@ -468,6 +471,10 @@ OpponentPredictionResult predictOpponentBehaviour(
         findActiveHouses(board);
 
     const bool hasActiveHouses = !houses.empty();
+    const bool hasMovementEvidence = !history.confirmedMovements().empty();
+    result.stats.movementObservationsUsed =
+        history.confirmedMovements().size();
+    result.stats.directionEvidenceUsed = hasMovementEvidence;
 
     // ---------------------------------------------------------
     // Step 4: Retain snapshot-derived house approach information.
@@ -494,7 +501,8 @@ OpponentPredictionResult predictOpponentBehaviour(
         )
     );
 
-    if (!validOptions(options, hasActiveHouses, hasHouseHistory)) {
+    if (!validOptions(
+            options, hasActiveHouses, hasHouseHistory, hasMovementEvidence)) {
         result.error = OpponentPredictionError::InvalidOptions;
         return result;
     }
@@ -502,9 +510,6 @@ OpponentPredictionResult predictOpponentBehaviour(
     // ---------------------------------------------------------
     // Step 5: Derive direction statistics from confirmed moves.
     // ---------------------------------------------------------
-
-    result.stats.movementObservationsUsed =
-        history.confirmedMovements().size();
 
     result.directions =
         calculateDirectionPredictions(
@@ -658,7 +663,8 @@ OpponentPredictionResult predictOpponentBehaviour(
                         houseHistoryScore,
                         options,
                         hasActiveHouses,
-                        hasHouseHistory
+                        hasHouseHistory,
+                        hasMovementEvidence
                     );
 
                 groupPredictions.push_back(prediction);

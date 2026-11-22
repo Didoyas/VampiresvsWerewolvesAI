@@ -216,14 +216,6 @@ CandidateRankingResult rankTurnCandidates(
                     options.transitionOptions
                 );
 
-            // A single transition is not interruptible. If it crossed the
-            // deadline, do not start an evaluation or publish a partial score.
-            if (deadlineReached(deadline)) {
-                result.timedOut = true;
-                candidateInterrupted = true;
-                break;
-            }
-
             if (!transition.valid()) {
                 ++result.stats.transitionFailures;
                 ++result.stats.simulationsFailed;
@@ -241,14 +233,6 @@ CandidateRankingResult rankTurnCandidates(
                     nextPlayer,
                     options.evaluationWeights
                 );
-
-            // Evaluation is also a non-preemptible operation. Never count a
-            // candidate if its current rollout finished beyond the deadline.
-            if (deadlineReached(deadline)) {
-                result.timedOut = true;
-                candidateInterrupted = true;
-                break;
-            }
 
             if (!evaluation.valid()) {
                 ++result.stats.evaluationFailures;

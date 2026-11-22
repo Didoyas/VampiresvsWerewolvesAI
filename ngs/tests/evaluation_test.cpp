@@ -272,6 +272,74 @@ void testHorizonCountersBeyondLimitsAreClampedSafely() {
     assert(std::isfinite(result.features.totalScore));
 }
 
+void testHousePotentialRewardsContestedHouseAccess() {
+    BoardState board = makeBoard(5, 5);
+    cell(board, 0, 0).vampires = 5;
+    cell(board, 4, 4).werewolves = 5;
+    cell(board, 1, 0).humans = 8;
+    cell(board, 1, 0).isHouse = true;
+
+    EvaluationWeights weights;
+    weights.population = 0.0;
+    weights.humanPotential = 0.0;
+    weights.housePotential = 1.0;
+    weights.threatExposure = 0.0;
+    weights.fragmentation = 0.0;
+
+    const auto vampireView = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves, weights);
+    const auto werewolfView = evaluatePosition(
+        board, Species::Werewolves, Species::Vampires, weights);
+
+    assert(vampireView.valid());
+    assert(werewolfView.valid());
+    assert(vampireView.features.housePotentialAdvantage > 0.0);
+    assert(werewolfView.features.housePotentialAdvantage < 0.0);
+    assert(std::abs(
+        vampireView.features.housePotentialAdvantage +
+        werewolfView.features.housePotentialAdvantage
+    ) < 1e-9);
+}
+
+void testOrdinaryHumansDoNotReceiveHouseObjectiveBonus() {
+    BoardState houseBoard = makeBoard(5, 5);
+    cell(houseBoard, 0, 0).vampires = 5;
+    cell(houseBoard, 4, 4).werewolves = 5;
+    cell(houseBoard, 1, 0).humans = 8;
+    cell(houseBoard, 1, 0).isHouse = true;
+
+    BoardState ordinaryBoard = houseBoard;
+    cell(ordinaryBoard, 1, 0).isHouse = false;
+
+    EvaluationWeights weights;
+    weights.population = 0.0;
+    weights.humanPotential = 0.0;
+    weights.housePotential = 1.0;
+    weights.threatExposure = 0.0;
+    weights.fragmentation = 0.0;
+
+    const auto houseResult = evaluatePosition(
+        houseBoard, Species::Vampires, Species::Werewolves, weights);
+    const auto ordinaryResult = evaluatePosition(
+        ordinaryBoard, Species::Vampires, Species::Werewolves, weights);
+
+    assert(houseResult.valid());
+    assert(ordinaryResult.valid());
+    assert(houseResult.features.housePotentialAdvantage > 0.0);
+    assert(ordinaryResult.features.housePotentialAdvantage == 0.0);
+    assert(houseResult.features.totalScore > ordinaryResult.features.totalScore);
+}
+
+void testNegativeHousePotentialWeightIsRejected() {
+    BoardState board = makeBoard(2, 2);
+    EvaluationWeights weights;
+    weights.housePotential = -0.01;
+
+    const auto result = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves, weights);
+    assert(result.error == EvaluationError::InvalidWeights);
+}
+
 void testInvalidWeights() {
     BoardState board = makeBoard(2, 2);
     EvaluationWeights weights;
@@ -293,6 +361,9 @@ int main() {
     testThreatSignDependsOnSideToMove();
     testPreviousPlyFootprintBlocksThreatEstimate();
     testSmallDisconnectedGroupGetsFragmentationPenalty();
+    testHousePotentialRewardsContestedHouseAccess();
+    testOrdinaryHumansDoNotReceiveHouseObjectiveBonus();
+    testNegativeHousePotentialWeightIsRejected();
     testUnknownHorizonPreservesLegacyWeights();
     testEarlyHorizonKeepsBaseWeights();
     testEndgameHorizonPrioritizesMaterialAndThreat();

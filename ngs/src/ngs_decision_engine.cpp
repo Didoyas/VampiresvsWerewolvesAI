@@ -109,6 +109,8 @@ void logDecisionDiagnostics(const AgentDecision& decision) {
          << " prediction_error="
          << predictionErrorName(search.predictionError)
          << " movement_obs_used=" << prediction.movementObservationsUsed
+         << " direction_evidence_used="
+         << (prediction.directionEvidenceUsed ? 1 : 0)
          << " house_trends_available=" << prediction.houseTrendsAvailable
          << " destinations_with_house_history_support="
          << prediction.destinationsWithHouseHistorySupport

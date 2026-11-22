@@ -11,6 +11,9 @@ namespace vvw::ngs {
 struct EvaluationWeights {
     double population{1.0};
     double humanPotential{0.35};
+    // Additional value for winning the race to active human houses.
+    // Start conservatively; tune through controlled self-play.
+    double housePotential{0.30};
     double threatExposure{1.0};
     double fragmentation{0.20};
 
@@ -34,11 +37,14 @@ struct EvaluationFeatures {
     // Positive values favour the perspective species.
     double populationAdvantage{0.0};
     double humanPotentialAdvantage{0.0};
+    double housePotentialAdvantage{0.0};
     double threatAdvantage{0.0};
     double fragmentationAdvantage{0.0};
 
     double ownHumanPotential{0.0};
     double opponentHumanPotential{0.0};
+    double ownHousePotential{0.0};
+    double opponentHousePotential{0.0};
 
     // Expected defenders lost in a one-ply attack by sideToMove.
     double expectedThreatenedPopulation{0.0};
@@ -54,6 +60,7 @@ struct EvaluationFeatures {
     double endgameUrgency{0.0};
     double effectivePopulationWeight{0.0};
     double effectiveHumanPotentialWeight{0.0};
+    double effectiveHousePotentialWeight{0.0};
     double effectiveThreatExposureWeight{0.0};
     double effectiveFragmentationWeight{0.0};
 
