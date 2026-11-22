@@ -163,6 +163,12 @@ std::vector<DirectionPrediction> calculateDirectionPredictions(
     for (const OpponentMovementObservation& movement :
          history.confirmedMovements()) {
 
+        // Defensive guard: never let unsigned subtraction turn a future-dated
+        // event into an apparently ancient observation.
+        if (movement.turn > currentTurn) {
+            continue;
+        }
+
         const int dx =
             movement.destination.x - movement.source.x;
 

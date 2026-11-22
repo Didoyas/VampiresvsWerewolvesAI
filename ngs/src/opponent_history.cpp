@@ -460,6 +460,15 @@ OpponentHistoryError OpponentHistory::recordConfirmedMovement(
     Position destination,
     Population count
 ) {
+    const OpponentMovementObservation movement{
+        turn, source, destination, count
+    };
+    return recordConfirmedMovementBatch({movement});
+}
+
+OpponentHistoryError OpponentHistory::recordConfirmedMovementBatch(
+    const std::vector<OpponentMovementObservation>& movements
+) {
     if (!isConfigured()) {
         return OpponentHistoryError::InvalidConfiguration;
     }
@@ -472,31 +481,36 @@ OpponentHistoryError OpponentHistory::recordConfirmedMovement(
         return OpponentHistoryError::HistoryNotInitialized;
     }
 
-    if (!inBounds(source) || !inBounds(destination)) {
-        return OpponentHistoryError::InvalidPosition;
-    }
-
-    if (!isAdjacent(source, destination) ||
-        count == 0 ||
-        count > 255) {
+    if (movements.empty()) {
         return OpponentHistoryError::InvalidMovement;
     }
 
-    if (hasMovementTurn_ &&
-        turn < latestMovementTurn_) {
+    const std::uint32_t batchTurn = movements.front().turn;
+    if (hasMovementTurn_ && batchTurn < latestMovementTurn_) {
         return OpponentHistoryError::InvalidTurn;
     }
 
-    confirmedMovements_.push_back({
-        turn,
-        source,
-        destination,
-        count
-    });
+    // Validate the complete event before mutating history. All movements in
+    // one accepted MOV packet share one authoritative ply identifier.
+    for (const OpponentMovementObservation& movement : movements) {
+        if (movement.turn != batchTurn) {
+            return OpponentHistoryError::InvalidTurn;
+        }
+        if (!inBounds(movement.source) ||
+            !inBounds(movement.destination)) {
+            return OpponentHistoryError::InvalidPosition;
+        }
+        if (!isAdjacent(movement.source, movement.destination) ||
+            movement.count == 0 || movement.count > 255) {
+            return OpponentHistoryError::InvalidMovement;
+        }
+    }
 
-    latestMovementTurn_ = turn;
+    confirmedMovements_.insert(
+        confirmedMovements_.end(), movements.begin(), movements.end()
+    );
+    latestMovementTurn_ = batchTurn;
     hasMovementTurn_ = true;
-
     return OpponentHistoryError::None;
 }
 

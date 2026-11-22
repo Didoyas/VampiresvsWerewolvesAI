@@ -495,6 +495,29 @@ void testConfirmedMovement() {
     assert(movement.count == 2);
 }
 
+void testConfirmedMovementBatchIsAtomic() {
+    OpponentHistory history(Species::Werewolves);
+    BoardState board = makeBoard();
+    assert(history.recordObservation(board, 1).valid());
+
+    const std::vector<OpponentMovementObservation> validBatch{
+        {7, {1, 1}, {2, 1}, 2},
+        {7, {3, 2}, {2, 2}, 3}
+    };
+    assert(history.recordConfirmedMovementBatch(validBatch) ==
+           OpponentHistoryError::None);
+    assert(history.confirmedMovements().size() == 2);
+
+    const std::vector<OpponentMovementObservation> invalidBatch{
+        {8, {1, 1}, {2, 1}, 2},
+        {8, {3, 2}, {3, 2}, 3}
+    };
+    assert(history.recordConfirmedMovementBatch(invalidBatch) ==
+           OpponentHistoryError::InvalidMovement);
+    // The valid first record from the rejected event must not be retained.
+    assert(history.confirmedMovements().size() == 2);
+}
+
 void testRejectInvalidMovement() {
     OpponentHistory history(Species::Werewolves);
 
@@ -610,6 +633,7 @@ int main() {
 
     // New confirmed movement history.
     testConfirmedMovement();
+    testConfirmedMovementBatchIsAtomic();
     testRejectInvalidMovement();
     testSnapshotDoesNotInferMovement();
 

@@ -202,6 +202,13 @@ public:
         Population count
     );
 
+    // Atomically records all movements from one authoritative opponent ply.
+    // The batch must be non-empty and every record must have the same turn.
+    // No observation is appended unless every record validates.
+    OpponentHistoryError recordConfirmedMovementBatch(
+        const std::vector<OpponentMovementObservation>& movements
+    );
+
     const std::vector<OpponentMovementObservation>&
     confirmedMovements() const noexcept;
 
