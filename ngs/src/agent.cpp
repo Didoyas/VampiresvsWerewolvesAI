@@ -42,7 +42,9 @@ AgentOptions::AgentOptions() {
 
     // Root pre-ranking and response search are both bounded. Tighten these
     // only after profiling the complete client on maximum-size boards.
-    opponentSearchOptions.rootRankingOptions.maxCandidatesToEvaluate = 24;
+    // Rank the full bounded portfolio (32 + 48 + 16 + 4 by default).
+    // chooseMove() raises this further when custom generation quotas are used.
+    opponentSearchOptions.rootRankingOptions.maxCandidatesToEvaluate = 100;
     opponentSearchOptions.rootRankingOptions.simulationsPerCandidate = 1;
     opponentSearchOptions.maxRootCandidates = 4;
     opponentSearchOptions.maxOpponentResponses = 8;
@@ -283,11 +285,19 @@ AgentDecision Agent::chooseMove(
 
     if (generated.valid()) {
         decision.candidatesGenerated = generated.candidates.size();
+        decision.candidateGenerationStats = generated.stats;
     }
 
     // Set both transition validation and opponent candidate generation to
     // match the information actually available in BoardState.
     OpponentSearchOptions searchOptions = options_.opponentSearchOptions;
+    // Candidate generation is already bounded by the configured per-class
+    // quotas. Rank the entire generated portfolio so a strong move cannot be
+    // discarded by a second, position-based sampling pass in candidate_ranker.
+    searchOptions.rootRankingOptions.maxCandidatesToEvaluate = std::max(
+        searchOptions.rootRankingOptions.maxCandidatesToEvaluate,
+        generated.candidates.size()
+    );
     searchOptions.rootRankingOptions.transitionOptions.requirePreviousPlyFootprint =
         board.previousPly.known;
     searchOptions.opponentGenerationOptions.singleMoveOptions.requirePreviousPlyFootprint =

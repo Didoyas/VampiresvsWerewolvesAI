@@ -51,6 +51,9 @@ struct MultiMoveCandidateStats {
     std::size_t sourceGroupsAvailable{0};
 
     std::size_t singleMoveCandidatesIncluded{0};
+    // Number of distinct source groups represented in the bounded single-move
+    // shortlist (one representative per group before second choices are added).
+    std::size_t singleMoveSourceGroupsCovered{0};
     std::size_t twoMoveCandidatesGenerated{0};
     std::size_t threeMoveCandidatesGenerated{0};
     std::size_t fourMoveCandidatesGenerated{0};

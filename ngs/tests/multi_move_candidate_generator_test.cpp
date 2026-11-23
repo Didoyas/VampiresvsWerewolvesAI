@@ -303,6 +303,108 @@ void testGenerationIsDeterministic() {
     }
 }
 
+
+int chebyshevDistanceForTest(Position lhs, Position rhs) {
+    const int dx = lhs.x > rhs.x ? lhs.x - rhs.x : rhs.x - lhs.x;
+    const int dy = lhs.y > rhs.y ? lhs.y - rhs.y : rhs.y - lhs.y;
+    return dx > dy ? dx : dy;
+}
+
+void testHighPriorityHouseApproachSurvivesSingleMoveQuota() {
+    BoardState board;
+    board.rows = 10;
+    board.columns = 10;
+    board.cells.resize(100);
+    board.ourSpecies = Species::Vampires;
+    board.previousPly.known = true;
+
+    // Put several low-population groups earlier in row-major order. None can
+    // capture the house, so they must not displace the main army's useful move.
+    board.at({0, 0}).vampires = 2;
+    board.at({0, 2}).vampires = 2;
+    board.at({0, 4}).vampires = 2;
+    board.at({0, 6}).vampires = 2;
+    board.at({0, 8}).vampires = 2;
+
+    // This source appears later in row-major order and can capture the house.
+    board.at({5, 5}).vampires = 20;
+    board.at({8, 8}).humans = 6;
+    board.at({8, 8}).isHouse = true;
+
+    MultiMoveCandidateOptions options;
+    options.maxSingleMoveCandidates = 1;
+    options.maxTwoMoveCandidates = 0;
+    options.maxThreeMoveCandidates = 0;
+    options.maxFourMoveCandidates = 0;
+
+    const MultiMoveCandidateResult result =
+        generateMultiMoveCandidates(board, Species::Vampires, options);
+
+    assert(result.valid());
+    assert(result.candidates.size() == 1);
+    assert(result.candidates.front().moves.size() == 1);
+
+    const Move& selected = result.candidates.front().moves.front();
+    assert((selected.source == Position{5, 5}));
+    assert(selected.count >= 6);
+    assert(chebyshevDistanceForTest(selected.destination, {8, 8}) <
+           chebyshevDistanceForTest(selected.source, {8, 8}));
+    assert(result.stats.singleMoveSourceGroupsCovered == 1);
+}
+
+void testSingleMoveShortlistCoversDistinctGroupsBeforeSecondChoices() {
+    BoardState board = makeBoard();
+    board.at({0, 0}).vampires = 8;
+    board.at({4, 0}).vampires = 12;
+    board.at({0, 4}).vampires = 10;
+
+    MultiMoveCandidateOptions options;
+    options.maxSingleMoveCandidates = 3;
+    options.maxTwoMoveCandidates = 0;
+    options.maxThreeMoveCandidates = 0;
+    options.maxFourMoveCandidates = 0;
+
+    const MultiMoveCandidateResult result =
+        generateMultiMoveCandidates(board, Species::Vampires, options);
+
+    assert(result.valid());
+    assert(result.candidates.size() == 3);
+
+    std::set<std::pair<int, int>> sources;
+    for (const TurnPlan& plan : result.candidates) {
+        assert(plan.moves.size() == 1);
+        sources.insert({plan.moves.front().source.x,
+                        plan.moves.front().source.y});
+    }
+
+    assert(sources.size() == 3);
+    assert(result.stats.singleMoveSourceGroupsCovered == 3);
+}
+
+void testBestDirectionIsSelectedForViableHouse() {
+    BoardState board = makeBoard();
+    board.at({1, 1}).vampires = 20;
+    board.at({3, 3}).humans = 6;
+    board.at({3, 3}).isHouse = true;
+
+    MultiMoveCandidateOptions options;
+    options.maxSingleMoveCandidates = 1;
+    options.maxTwoMoveCandidates = 0;
+    options.maxThreeMoveCandidates = 0;
+    options.maxFourMoveCandidates = 0;
+
+    const MultiMoveCandidateResult result =
+        generateMultiMoveCandidates(board, Species::Vampires, options);
+
+    assert(result.valid());
+    assert(result.candidates.size() == 1);
+
+    const Move& selected = result.candidates.front().moves.front();
+    assert((selected.source == Position{1, 1}));
+    assert(selected.count >= 6);
+    assert((selected.destination == Position{2, 2}));
+}
+
 void testNoAvailableGroupsProducesValidEmptyResult() {
     BoardState board = makeBoard();
 
@@ -329,6 +431,9 @@ int main() {
     testInvalidOptionsAreReported();
     testStageOneErrorsArePropagated();
     testGenerationIsDeterministic();
+    testHighPriorityHouseApproachSurvivesSingleMoveQuota();
+    testSingleMoveShortlistCoversDistinctGroupsBeforeSecondChoices();
+    testBestDirectionIsSelectedForViableHouse();
     testNoAvailableGroupsProducesValidEmptyResult();
 
     std::cout << "All multi-move candidate generator tests passed.\n";

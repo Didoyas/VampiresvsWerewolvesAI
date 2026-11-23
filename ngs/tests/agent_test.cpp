@@ -153,6 +153,35 @@ void testNoFriendlyGroupsReturnsNoLegalMove() {
     assert(decision.method == AgentDecisionMethod::NoLegalMove);
 }
 
+
+void testAgentRanksTheEntireGeneratedCandidatePortfolio() {
+    BoardState board = makeBoard();
+    board.previousPly.known = true;
+
+    AgentOptions options;
+    options.searchBudget = std::chrono::seconds{2};
+    options.candidateGenerationOptions.maxSingleMoveCandidates = 8;
+    options.candidateGenerationOptions.maxTwoMoveCandidates = 0;
+    options.candidateGenerationOptions.maxThreeMoveCandidates = 0;
+    options.candidateGenerationOptions.maxFourMoveCandidates = 0;
+    options.opponentSearchOptions.rootRankingOptions.maxCandidatesToEvaluate = 1;
+    options.opponentSearchOptions.maxRootCandidates = 1;
+    options.opponentSearchOptions.maxOpponentResponses = 1;
+    options.opponentSearchOptions.maxLikelyOpponentResponses = 1;
+    options.opponentSearchOptions.maxAdversarialOpponentResponses = 1;
+
+    Agent agent(Species::Vampires, options);
+    const AgentDecision decision = agent.chooseMove(board);
+
+    assert(decision.hasMove());
+    assert(decision.candidatesGenerated > 1);
+    assert(decision.opponentSearchStats.rootRankingCandidatesProvided ==
+           decision.candidatesGenerated);
+    assert(decision.opponentSearchStats.rootRankingCandidatesEvaluated ==
+           decision.candidatesGenerated);
+    assert(decision.opponentSearchStats.rootRankingCandidatesSkippedByBudget == 0);
+}
+
 void testInvalidBoardDoesNotRecordHistory() {
     BoardState board = makeBoard();
     board.cells.pop_back();
@@ -173,6 +202,7 @@ int main() {
     testHistoryAdvancesAcrossUpdates();
     testHistoryUpdateFailureIsObservable();
     testNoFriendlyGroupsReturnsNoLegalMove();
+    testAgentRanksTheEntireGeneratedCandidatePortfolio();
     testInvalidBoardDoesNotRecordHistory();
 
     std::cout << "All agent orchestration tests passed.\n";

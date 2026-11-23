@@ -139,6 +139,26 @@ void logDecisionDiagnostics(const AgentDecision& decision) {
          << " predictor_us=" << search.predictionElapsedMicroseconds
          << " response_search_us=" << search.searchElapsedMicroseconds
          << " candidates_generated=" << decision.candidatesGenerated
+         << " single_available="
+         << decision.candidateGenerationStats.singleMoveCandidatesAvailable
+         << " source_groups="
+         << decision.candidateGenerationStats.sourceGroupsAvailable
+         << " singles_selected="
+         << decision.candidateGenerationStats.singleMoveCandidatesIncluded
+         << " single_groups_covered="
+         << decision.candidateGenerationStats.singleMoveSourceGroupsCovered
+         << " pairs_generated="
+         << decision.candidateGenerationStats.twoMoveCandidatesGenerated
+         << " triples_generated="
+         << decision.candidateGenerationStats.threeMoveCandidatesGenerated
+         << " quads_generated="
+         << decision.candidateGenerationStats.fourMoveCandidatesGenerated
+         << " rank_provided="
+         << search.rootRankingCandidatesProvided
+         << " rank_evaluated="
+         << search.rootRankingCandidatesEvaluated
+         << " rank_skipped="
+         << search.rootRankingCandidatesSkippedByBudget
          << " root_candidates=" << decision.rootCandidatesEvaluated
          << " selected_move_count=" << decision.plan.moves.size();
 

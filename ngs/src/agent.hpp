@@ -36,6 +36,7 @@ struct AgentDecision {
 
     std::uint32_t turnNumber{0};
     std::size_t candidatesGenerated{0};
+    MultiMoveCandidateStats candidateGenerationStats{};
     std::size_t rootCandidatesEvaluated{0};
     std::size_t opponentResponsesEvaluated{0};
 

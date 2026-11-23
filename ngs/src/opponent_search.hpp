@@ -85,6 +85,9 @@ struct RootCandidateScore {
 struct OpponentSearchStats {
     std::size_t rootCandidatesProvided{0};
     std::size_t rootCandidatesShortlisted{0};
+    std::size_t rootRankingCandidatesProvided{0};
+    std::size_t rootRankingCandidatesEvaluated{0};
+    std::size_t rootRankingCandidatesSkippedByBudget{0};
     std::size_t rootCandidatesEvaluated{0};
 
     std::size_t rootSimulationsAttempted{0};

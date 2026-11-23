@@ -561,6 +561,13 @@ OpponentSearchResult searchCore(
             deadline
         );
 
+    result.stats.rootRankingCandidatesProvided =
+        rootRanking.stats.candidatesProvided;
+    result.stats.rootRankingCandidatesEvaluated =
+        rootRanking.stats.candidatesEvaluated;
+    result.stats.rootRankingCandidatesSkippedByBudget =
+        rootRanking.stats.candidatesSkippedByBudget;
+
     if (!rootRanking.ranked.empty()) {
         result.hasRootRankingFallbackCandidate = true;
         result.rootRankingFallbackCandidateIndex =
