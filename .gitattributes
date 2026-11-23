@@ -1,0 +1,6 @@
+# Stop Windows (CRLF) vs Mac (LF) line endings from causing fake conflicts
+* text=auto eol=lf
+*.exe binary
+*.dll binary
+*.pdf binary
+*.png binary

@@ -1,0 +1,70 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# CMake
+build/
+out/
+cmake-build-*/
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+CMakeUserPresets.json
+
+# Visual Studio
+.vs/
+*.pdb
+*.ilk
+*.user
+
+# Editors
+.vscode/
+.idea/
+.cache/
+*.swp
+
+# macOS debug symbols
+*.dSYM/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Course server files (provided by the course, not part of this repo)
+*.exe.config
+
+# Logs
+*.log
