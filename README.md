@@ -15,7 +15,6 @@ Course project, MSc AI (CentraleSupélec / Université Paris-Saclay).
 - [Where each algorithm is implemented](#where-each-algorithm-is-implemented)
 - [Results](#results)
 - [Project structure](#project-structure)
-- [Roadmap](#roadmap)
 - [Acknowledgments](#acknowledgments)
 
 ## About
@@ -233,21 +232,6 @@ The search reaches depth 12–16 on thetrap and 6–8 on the 50×50 board. In th
 ├── .gitignore
 └── README.md
 ```
-
-## Roadmap
-
-- [x] TCP client and protocol (macOS, Linux, Windows)
-- [x] Game rules and board updates
-- [x] Evaluation function (material, food race with tempo, attack or run, game phase)
-- [x] Candidate move generation with move ordering
-- [x] Alpha-beta search with iterative deepening, time control and a transposition table
-- [x] Fallback move so the client always answers
-- [x] Tests: rules, bot-vs-bot games up to 255×255, full games over a socket
-- [ ] Test against the official server, including a split (two moves from one cell); if it's rejected, set `ALLOW_SPLITS = false` in `moves.cpp`
-- [ ] Build and run on the CTI machines (where the tournament is played)
-- [ ] Partial moves (move part of a group while the rest stays)
-- [x] Self-play tuning of the evaluation weights (current weights confirmed)
-- [ ] Tune the move-ordering weights in `moves.cpp` the same way
 
 ## Acknowledgments
 
