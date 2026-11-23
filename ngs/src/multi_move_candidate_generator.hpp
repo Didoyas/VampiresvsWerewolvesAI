@@ -9,12 +9,10 @@
 
 namespace vvw::ngs {
 
-// Stage 2 builds complete turn candidates by combining one Stage 1 movement
-// from each of two, three, or four distinct source cells.
-//
-// This deliberately does not split one source group across multiple
-// destinations. That extension can be added separately after this bounded
-// multi-source portfolio is measured.
+// Stage 2 builds complete turn candidates from three strategic movement
+// patterns: splitting one source group across distinct destinations, merging
+// multiple source groups at a shared destination, and general multi-source
+// plans. Every plan remains subject to the same authoritative validator.
 struct MultiMoveCandidateOptions {
     CandidateGenerationOptions singleMoveOptions{};
 
@@ -27,6 +25,12 @@ struct MultiMoveCandidateOptions {
     std::size_t maxTwoMoveCandidates{128};
     std::size_t maxThreeMoveCandidates{64};
     std::size_t maxFourMoveCandidates{0};
+
+    // Special two-move plans are generated first within the shared
+    // maxTwoMoveCandidates budget. They do not increase the overall pair
+    // branching factor beyond that budget.
+    std::size_t maxSplitCandidates{12};
+    std::size_t maxMergeCandidates{12};
 
     // Number of deterministic movement combinations sampled for each
     // selected set of source cells.
@@ -55,6 +59,8 @@ struct MultiMoveCandidateStats {
     // shortlist (one representative per group before second choices are added).
     std::size_t singleMoveSourceGroupsCovered{0};
     std::size_t twoMoveCandidatesGenerated{0};
+    std::size_t splitPlansGenerated{0};
+    std::size_t mergePlansGenerated{0};
     std::size_t threeMoveCandidatesGenerated{0};
     std::size_t fourMoveCandidatesGenerated{0};
 

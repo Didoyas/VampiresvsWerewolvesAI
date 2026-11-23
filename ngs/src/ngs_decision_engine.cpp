@@ -149,6 +149,10 @@ void logDecisionDiagnostics(const AgentDecision& decision) {
          << decision.candidateGenerationStats.singleMoveSourceGroupsCovered
          << " pairs_generated="
          << decision.candidateGenerationStats.twoMoveCandidatesGenerated
+         << " split_plans_generated="
+         << decision.candidateGenerationStats.splitPlansGenerated
+         << " merge_plans_generated="
+         << decision.candidateGenerationStats.mergePlansGenerated
          << " triples_generated="
          << decision.candidateGenerationStats.threeMoveCandidatesGenerated
          << " quads_generated="

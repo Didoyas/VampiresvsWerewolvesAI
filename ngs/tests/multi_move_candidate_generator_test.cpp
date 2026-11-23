@@ -1,4 +1,5 @@
 #include "../src/multi_move_candidate_generator.hpp"
+#include "../src/transition_engine.hpp"
 
 #include <cassert>
 #include <cstddef>
@@ -68,7 +69,11 @@ void testGeneratesTwoSourcePlans() {
         assert(plan.moves.size() <= 2);
         assert(validateTurnPlan(board, plan, Species::Vampires).valid());
         if (plan.moves.size() == 2) {
-            assert(hasDistinctSources(plan));
+            const bool split =
+                plan.moves[0].source == plan.moves[1].source &&
+                plan.moves[0].destination != plan.moves[1].destination;
+            const bool multiSource = hasDistinctSources(plan);
+            assert(split || multiSource);
         }
     }
 }
@@ -90,7 +95,9 @@ void testGeneratesThreeSourcePlans() {
 
     for (const TurnPlan& plan : result.candidates) {
         assert(plan.moves.size() == 2 || plan.moves.size() == 3);
-        assert(hasDistinctSources(plan));
+        if (plan.moves.size() == 3) {
+            assert(hasDistinctSources(plan));
+        }
         assert(validateTurnPlan(board, plan, Species::Vampires).valid());
     }
 }
@@ -166,7 +173,7 @@ void testFourMoveCombinationAttemptBudgetIsEnforced() {
     assert(result.stats.combinationBudgetExhausted);
 }
 
-void testEveryCompositePlanUsesDifferentSourceCells() {
+void testCompositePlansSupportSplitsAndDistinctSources() {
     BoardState board = makeBoard();
     board.at({1, 1}).vampires = 100;
     board.at({3, 1}).vampires = 100;
@@ -184,10 +191,17 @@ void testEveryCompositePlanUsesDifferentSourceCells() {
     assert(result.valid());
     assert(!result.candidates.empty());
 
+    bool foundSplit = false;
     for (const TurnPlan& plan : result.candidates) {
         assert(plan.moves.size() >= 2);
-        assert(hasDistinctSources(plan));
+        assert(validateTurnPlan(board, plan, Species::Vampires).valid());
+        if (plan.moves.size() == 2 &&
+            plan.moves[0].source == plan.moves[1].source &&
+            plan.moves[0].destination != plan.moves[1].destination) {
+            foundSplit = true;
+        }
     }
+    assert(foundSplit);
 }
 
 void testSingleMoveFallbacksAreRetained() {
@@ -405,6 +419,131 @@ void testBestDirectionIsSelectedForViableHouse() {
     assert((selected.destination == Position{2, 2}));
 }
 
+void testSplitPlansDistributeOneGroupToTwoHouses() {
+    BoardState board = makeBoard();
+    board.at({2, 2}).vampires = 100;
+    board.at({1, 2}).humans = 20;
+    board.at({1, 2}).isHouse = true;
+    board.at({3, 2}).humans = 20;
+    board.at({3, 2}).isHouse = true;
+
+    MultiMoveCandidateOptions options;
+    options.maxSingleMoveCandidates = 0;
+    options.maxTwoMoveCandidates = 12;
+    options.maxSplitCandidates = 12;
+    options.maxMergeCandidates = 0;
+    options.maxThreeMoveCandidates = 0;
+    options.maxFourMoveCandidates = 0;
+
+    const MultiMoveCandidateResult result =
+        generateMultiMoveCandidates(board, Species::Vampires, options);
+
+    assert(result.valid());
+    assert(result.stats.splitPlansGenerated > 0);
+
+    bool foundTwoHouseCapture = false;
+    for (const TurnPlan& plan : result.candidates) {
+        if (plan.moves.size() != 2 ||
+            plan.moves[0].source != Position{2, 2} ||
+            plan.moves[1].source != Position{2, 2} ||
+            plan.moves[0].destination == plan.moves[1].destination) {
+            continue;
+        }
+
+        const std::uint64_t outgoing =
+            static_cast<std::uint64_t>(plan.moves[0].count) +
+            static_cast<std::uint64_t>(plan.moves[1].count);
+        assert(outgoing <= board.at({2, 2}).vampires);
+        assert(validateTurnPlan(board, plan, Species::Vampires).valid());
+
+        std::mt19937 randomEngine(7);
+        const TransitionResult transition = applyTurnPlan(
+            board, plan, Species::Vampires, randomEngine
+        );
+        assert(transition.valid());
+        assert(transition.nextState.at(plan.moves[0].destination).humans == 0);
+        assert(transition.nextState.at(plan.moves[1].destination).humans == 0);
+        foundTwoHouseCapture = true;
+        break;
+    }
+
+    assert(foundTwoHouseCapture);
+}
+
+void testMergePlansCombineGroupsToCaptureOneHouse() {
+    BoardState board = makeBoard();
+    board.at({1, 2}).vampires = 20;
+    board.at({3, 2}).vampires = 20;
+    board.at({2, 2}).humans = 30;
+    board.at({2, 2}).isHouse = true;
+
+    MultiMoveCandidateOptions options;
+    options.maxSingleMoveCandidates = 0;
+    options.maxTwoMoveCandidates = 12;
+    options.maxSplitCandidates = 0;
+    options.maxMergeCandidates = 12;
+    options.maxThreeMoveCandidates = 0;
+    options.maxFourMoveCandidates = 0;
+
+    const MultiMoveCandidateResult result =
+        generateMultiMoveCandidates(board, Species::Vampires, options);
+
+    assert(result.valid());
+    assert(result.stats.mergePlansGenerated > 0);
+
+    bool foundSuccessfulMerge = false;
+    for (const TurnPlan& plan : result.candidates) {
+        if (plan.moves.size() != 2 ||
+            plan.moves[0].source == plan.moves[1].source ||
+            plan.moves[0].destination != Position{2, 2} ||
+            plan.moves[1].destination != Position{2, 2}) {
+            continue;
+        }
+
+        const std::uint64_t incoming =
+            static_cast<std::uint64_t>(plan.moves[0].count) +
+            static_cast<std::uint64_t>(plan.moves[1].count);
+        assert(incoming >= board.at({2, 2}).humans);
+        assert(validateTurnPlan(board, plan, Species::Vampires).valid());
+
+        std::mt19937 randomEngine(11);
+        const TransitionResult transition = applyTurnPlan(
+            board, plan, Species::Vampires, randomEngine
+        );
+        assert(transition.valid());
+        assert(transition.nextState.at({2, 2}).humans == 0);
+        assert(transition.nextState.at({2, 2}).vampires == incoming + 30);
+        foundSuccessfulMerge = true;
+        break;
+    }
+
+    assert(foundSuccessfulMerge);
+}
+
+void testSplitAndMergePlansStayWithinSharedPairQuota() {
+    BoardState board = makeBoard();
+    board.at({2, 2}).vampires = 100;
+    board.at({1, 2}).vampires = 20;
+    board.at({3, 2}).vampires = 20;
+
+    MultiMoveCandidateOptions options;
+    options.maxSingleMoveCandidates = 0;
+    options.maxTwoMoveCandidates = 5;
+    options.maxSplitCandidates = 5;
+    options.maxMergeCandidates = 5;
+    options.maxThreeMoveCandidates = 0;
+    options.maxFourMoveCandidates = 0;
+
+    const MultiMoveCandidateResult result =
+        generateMultiMoveCandidates(board, Species::Vampires, options);
+
+    assert(result.valid());
+    assert(result.stats.twoMoveCandidatesGenerated <= 5);
+    assert(result.stats.splitPlansGenerated +
+           result.stats.mergePlansGenerated <=
+           result.stats.twoMoveCandidatesGenerated);
+}
+
 void testNoAvailableGroupsProducesValidEmptyResult() {
     BoardState board = makeBoard();
 
@@ -424,7 +563,7 @@ int main() {
     testGeneratesFourSourcePlans();
     testFourMoveCandidateQuotaIsRespected();
     testFourMoveCombinationAttemptBudgetIsEnforced();
-    testEveryCompositePlanUsesDifferentSourceCells();
+    testCompositePlansSupportSplitsAndDistinctSources();
     testSingleMoveFallbacksAreRetained();
     testCandidateQuotasAreRespected();
     testCombinationAttemptBudgetIsEnforced();
@@ -434,6 +573,9 @@ int main() {
     testHighPriorityHouseApproachSurvivesSingleMoveQuota();
     testSingleMoveShortlistCoversDistinctGroupsBeforeSecondChoices();
     testBestDirectionIsSelectedForViableHouse();
+    testSplitPlansDistributeOneGroupToTwoHouses();
+    testMergePlansCombineGroupsToCaptureOneHouse();
+    testSplitAndMergePlansStayWithinSharedPairQuota();
     testNoAvailableGroupsProducesValidEmptyResult();
 
     std::cout << "All multi-move candidate generator tests passed.\n";

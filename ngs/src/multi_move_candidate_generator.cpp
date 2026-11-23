@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,18 @@ struct SourceBucket {
     Population sourcePopulation{0};
     double priority{0.0};
     std::vector<ScoredMove> moves;
+};
+
+struct DestinationBucket {
+    Position destination{};
+    double priority{0.0};
+    std::vector<ScoredMove> incoming;
+};
+
+enum class CompoundPlanKind {
+    General,
+    Split,
+    Merge
 };
 
 struct HouseObjective {
@@ -302,6 +315,128 @@ std::vector<SourceBucket> makeSourceBuckets(
     return buckets;
 }
 
+// Index candidate arrivals by destination. A source contributes at most
+// two ranked movement sizes to a given destination, keeping merge sampling
+// bounded while retaining a useful amount of population flexibility.
+std::vector<DestinationBucket> makeDestinationBuckets(
+    const BoardState& board,
+    Species actingSpecies,
+    const std::vector<SourceBucket>& sources,
+    SearchDeadline deadline,
+    bool& timedOut
+) {
+    std::vector<DestinationBucket> buckets;
+    std::vector<std::size_t> bucketForCell(board.cells.size(), kNoBucket);
+
+    std::vector<std::uint8_t> variantsForDestination(board.cells.size(), 0);
+    std::vector<std::size_t> touchedDestinations;
+
+    for (const SourceBucket& source : sources) {
+        touchedDestinations.clear();
+        for (const ScoredMove& scored : source.moves) {
+            if (deadlineReached(deadline)) {
+                timedOut = true;
+                return buckets;
+            }
+
+            const std::size_t destinationIndex =
+                board.index(scored.move.destination);
+            if (variantsForDestination[destinationIndex] == 0) {
+                touchedDestinations.push_back(destinationIndex);
+            }
+            if (variantsForDestination[destinationIndex] >= 2) {
+                continue;
+            }
+            ++variantsForDestination[destinationIndex];
+
+            std::size_t bucketIndex = bucketForCell[destinationIndex];
+            if (bucketIndex == kNoBucket) {
+                bucketIndex = buckets.size();
+                bucketForCell[destinationIndex] = bucketIndex;
+                buckets.push_back({scored.move.destination, scored.priority, {}});
+            }
+
+            DestinationBucket& bucket = buckets[bucketIndex];
+            bucket.incoming.push_back(scored);
+            if (scored.priority > bucket.priority) {
+                bucket.priority = scored.priority;
+            }
+        }
+        for (const std::size_t destinationIndex : touchedDestinations) {
+            variantsForDestination[destinationIndex] = 0;
+        }
+    }
+
+    // A merge can be strategically valuable even when neither incoming
+    // group can capture the target alone. Raise destinations where the best
+    // pair crosses a deterministic conversion or combat threshold.
+    for (DestinationBucket& bucket : buckets) {
+        const Cell& target = board.at(bucket.destination);
+        const Population friendlyAtTarget = populationFor(target, actingSpecies);
+        const Population enemyAtTarget =
+            populationFor(target, opponentOf(actingSpecies));
+
+        double combinedPriority = bucket.priority;
+        for (std::size_t i = 0; i < bucket.incoming.size(); ++i) {
+            for (std::size_t j = i + 1; j < bucket.incoming.size(); ++j) {
+                if (deadlineReached(deadline)) {
+                    timedOut = true;
+                    return buckets;
+                }
+                const Move& first = bucket.incoming[i].move;
+                const Move& second = bucket.incoming[j].move;
+                if (first.source == second.source) {
+                    continue;
+                }
+
+                const std::uint64_t arriving =
+                    static_cast<std::uint64_t>(first.count) +
+                    static_cast<std::uint64_t>(second.count);
+                const std::uint64_t totalFriendly =
+                    arriving + static_cast<std::uint64_t>(friendlyAtTarget);
+
+                if (target.humans > 0 && totalFriendly >= target.humans) {
+                    const double conversionPriority =
+                        1200.0 + 10.0 * static_cast<double>(target.humans) +
+                        (target.isHouse ? 150.0 : 0.0);
+                    combinedPriority = std::max(
+                        combinedPriority, conversionPriority
+                    );
+                }
+
+                if (enemyAtTarget > 0 &&
+                    2ULL * totalFriendly >=
+                        3ULL * static_cast<std::uint64_t>(enemyAtTarget)) {
+                    combinedPriority = std::max(
+                        combinedPriority,
+                        700.0 + static_cast<double>(enemyAtTarget)
+                    );
+                }
+
+                if (friendlyAtTarget > 0) {
+                    combinedPriority = std::max(combinedPriority, 8.0);
+                }
+            }
+        }
+        bucket.priority = combinedPriority;
+    }
+
+    std::stable_sort(
+        buckets.begin(), buckets.end(),
+        [](const DestinationBucket& lhs, const DestinationBucket& rhs) {
+            if (lhs.priority != rhs.priority) {
+                return lhs.priority > rhs.priority;
+            }
+            if (lhs.destination.y != rhs.destination.y) {
+                return lhs.destination.y < rhs.destination.y;
+            }
+            return lhs.destination.x < rhs.destination.x;
+        }
+    );
+
+    return buckets;
+}
+
 // Select singles round-robin by source group. The first pass gives each
 // strategically ranked group one opportunity; later passes add alternatives
 // from groups that have multiple promising directions/split sizes.
@@ -413,7 +548,10 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
     validationOptions.requirePreviousPlyFootprint =
         options.singleMoveOptions.requirePreviousPlyFootprint;
 
-    const auto appendCombination = [&](const TurnPlan& plan) -> bool {
+    const auto appendCombination = [&, validationOptions](
+        const TurnPlan& plan,
+        CompoundPlanKind kind = CompoundPlanKind::General
+    ) -> bool {
         if (deadlineReached(deadline)) {
             result.timedOut = true;
             return false;
@@ -449,6 +587,11 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
 
         if (plan.moves.size() == 2) {
             ++result.stats.twoMoveCandidatesGenerated;
+            if (kind == CompoundPlanKind::Split) {
+                ++result.stats.splitPlansGenerated;
+            } else if (kind == CompoundPlanKind::Merge) {
+                ++result.stats.mergePlansGenerated;
+            }
         } else if (plan.moves.size() == 3) {
             ++result.stats.threeMoveCandidatesGenerated;
         } else if (plan.moves.size() == 4) {
@@ -458,11 +601,116 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
         return true;
     };
 
+    const std::size_t pairQuota = options.maxTwoMoveCandidates;
+
+    // First generate explicit split plans: one source distributes part of
+    // its population to two different neighbouring destinations. The total
+    // outgoing population is checked here cheaply and then revalidated by
+    // validateTurnPlan() before the plan enters the search portfolio.
+    const std::size_t splitQuota = options.maxSplitCandidates;
+    if (splitQuota > 0 && pairQuota > 0) {
+        for (const SourceBucket& source : buckets) {
+            if (result.stats.splitPlansGenerated >= splitQuota ||
+                result.stats.twoMoveCandidatesGenerated >= pairQuota ||
+                result.timedOut) {
+                break;
+            }
+
+            for (std::size_t i = 0;
+                 i < source.moves.size() &&
+                 result.stats.splitPlansGenerated < splitQuota &&
+                 result.stats.twoMoveCandidatesGenerated < pairQuota &&
+                 !result.timedOut;
+                 ++i) {
+                for (std::size_t j = i + 1;
+                     j < source.moves.size() &&
+                     result.stats.splitPlansGenerated < splitQuota &&
+                     result.stats.twoMoveCandidatesGenerated < pairQuota &&
+                     !result.timedOut;
+                     ++j) {
+                    if (deadlineReached(deadline)) {
+                        result.timedOut = true;
+                        break;
+                    }
+                    const Move& first = source.moves[i].move;
+                    const Move& second = source.moves[j].move;
+                    if (first.destination == second.destination) {
+                        continue;
+                    }
+                    if (static_cast<std::uint64_t>(first.count) +
+                            static_cast<std::uint64_t>(second.count) >
+                        source.sourcePopulation) {
+                        continue;
+                    }
+
+                    TurnPlan plan;
+                    plan.moves.push_back(first);
+                    plan.moves.push_back(second);
+                    if (!appendCombination(plan, CompoundPlanKind::Split)) {
+                        return result;
+                    }
+                }
+            }
+        }
+    }
+
+    // Next generate explicit merge plans: distinct source groups converge
+    // on the same destination. The transition engine aggregates all arrivals
+    // before resolving a house, friendly group, or enemy encounter.
+    const std::size_t mergeQuota = options.maxMergeCandidates;
+    if (mergeQuota > 0 && pairQuota > 0 &&
+        result.stats.twoMoveCandidatesGenerated < pairQuota &&
+        !result.timedOut) {
+        const std::vector<DestinationBucket> destinations =
+            makeDestinationBuckets(
+                board, actingSpecies, buckets, deadline, helperTimedOut
+            );
+        if (helperTimedOut) {
+            result.timedOut = true;
+            return result;
+        }
+
+        for (const DestinationBucket& destination : destinations) {
+            if (result.stats.mergePlansGenerated >= mergeQuota ||
+                result.stats.twoMoveCandidatesGenerated >= pairQuota ||
+                result.timedOut) {
+                break;
+            }
+
+            for (std::size_t i = 0;
+                 i < destination.incoming.size() &&
+                 result.stats.mergePlansGenerated < mergeQuota &&
+                 result.stats.twoMoveCandidatesGenerated < pairQuota &&
+                 !result.timedOut;
+                 ++i) {
+                for (std::size_t j = i + 1;
+                     j < destination.incoming.size() &&
+                     result.stats.mergePlansGenerated < mergeQuota &&
+                     result.stats.twoMoveCandidatesGenerated < pairQuota &&
+                     !result.timedOut;
+                     ++j) {
+                    const Move& first = destination.incoming[i].move;
+                    const Move& second = destination.incoming[j].move;
+                    if (first.source == second.source) {
+                        continue;
+                    }
+
+                    TurnPlan plan;
+                    plan.moves.push_back(first);
+                    plan.moves.push_back(second);
+                    if (!appendCombination(plan, CompoundPlanKind::Merge)) {
+                        return result;
+                    }
+                }
+            }
+        }
+    }
+
+    // Fill the remaining pair budget with general plans drawn from distinct
+    // sources and independently selected destinations.
     // Build pair plans by walking source-group offsets. This spreads the
     // earliest pairs across the board instead of exhausting all variants of
     // the first two source cells before considering other groups.
-    const std::size_t pairQuota = options.maxTwoMoveCandidates;
-
     if (pairQuota > 0 && buckets.size() >= 2) {
         for (std::size_t offset = 1;
              offset < buckets.size() &&
