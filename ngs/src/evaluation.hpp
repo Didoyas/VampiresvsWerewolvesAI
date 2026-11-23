@@ -10,8 +10,11 @@ namespace vvw::ngs {
 // These are initial heuristic values and should be tuned with self-play.
 struct EvaluationWeights {
     double population{1.0};
+    // Attraction to ordinary human cells, measured from the nearest group.
     double humanPotential{0.35};
-    // Additional value for winning the race to active human houses.
+    // Additional value for winning the race to active human houses. House
+    // distance is measured only from groups large enough to convert the
+    // house population deterministically.
     // Start conservatively; tune through controlled self-play.
     double housePotential{0.30};
     double threatExposure{1.0};
@@ -43,6 +46,8 @@ struct EvaluationFeatures {
 
     double ownHumanPotential{0.0};
     double opponentHumanPotential{0.0};
+    // Only groups with enough population to deterministically convert a
+    // house's current human population contribute to house potential.
     double ownHousePotential{0.0};
     double opponentHousePotential{0.0};
 

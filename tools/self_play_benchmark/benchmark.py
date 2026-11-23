@@ -32,6 +32,9 @@ class ClientMetrics:
     timings_ms: list[float]
     error_lines: int
     return_code: int | None
+    connected_and_initialized: bool
+    received_end: bool
+    received_bye: bool
 
     @property
     def decision_count(self) -> int:
@@ -189,10 +192,36 @@ def parse_server_log(path: Path) -> ServerMetrics:
     )
 
 
+def client_protocol_state(path: Path) -> tuple[bool, bool]:
+    """Return whether the client log contains both server closure messages.
+
+    The current client writes explicit [RX] END and [RX] BYE markers. These
+    per-connection markers are the reliable completion signal even when the
+    server process intentionally remains alive after the match.
+    """
+    if not path.is_file():
+        return False, False
+
+    received_end = False
+    received_bye = False
+    with path.open("r", encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            if "[RX]" not in line:
+                continue
+            if "END" in line:
+                received_end = True
+            if "BYE" in line:
+                received_bye = True
+            if received_end and received_bye:
+                break
+    return received_end, received_bye
+
+
 def parse_client_log(path: Path, label: str, return_code: int | None) -> ClientMetrics:
     timings: list[float] = []
     species = "unknown"
     error_lines = 0
+    connected_and_initialized = False
     timing_prefix = "[TIMING] Decision and MOV-send processing="
 
     if path.is_file():
@@ -200,6 +229,11 @@ def parse_client_log(path: Path, label: str, return_code: int | None) -> ClientM
             for line in stream:
                 if "[ERROR]" in line:
                     error_lines += 1
+
+                if "Game initialized:" in line:
+                    # The client emits this only after a successful TCP
+                    # connection and completion of the initial SET/HUM/HME/MAP.
+                    connected_and_initialized = True
 
                 if "Game initialized:" in line and "species=" in line:
                     if "species=vampires" in line:
@@ -221,12 +255,74 @@ def parse_client_log(path: Path, label: str, return_code: int | None) -> ClientM
                     else:
                         timings.append(float(value))
 
+    received_end, received_bye = client_protocol_state(path)
     return ClientMetrics(
         label=label,
         species=species,
         timings_ms=timings,
         error_lines=error_lines,
         return_code=return_code,
+        connected_and_initialized=connected_and_initialized,
+        received_end=received_end,
+        received_bye=received_bye,
+    )
+
+
+def snapshot_server_traces(directory: Path, pattern: str) -> dict[Path, tuple[int, int]]:
+    """Snapshot trace paths before a game so stale traces are never reused."""
+    snapshot: dict[Path, tuple[int, int]] = {}
+    if not directory.is_dir():
+        return snapshot
+    for path in directory.glob(pattern):
+        if not path.is_file():
+            continue
+        try:
+            stat = path.stat()
+            snapshot[path.resolve()] = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            continue
+    return snapshot
+
+
+def find_new_server_trace(
+    directory: Path,
+    pattern: str,
+    before: dict[Path, tuple[int, int]],
+    started_at_ns: int,
+) -> Path | None:
+    """Find the newest trace created or modified by this game only."""
+    if not directory.is_dir():
+        return None
+
+    candidates: list[tuple[int, int, Path]] = []
+    # A small tolerance avoids excluding a newly created file because of
+    # filesystem timestamp precision or clock granularity on Windows.
+    minimum_mtime_ns = started_at_ns - 2_000_000_000
+    for path in directory.glob(pattern):
+        if not path.is_file():
+            continue
+        try:
+            stat = path.stat()
+            resolved = path.resolve()
+            current = (stat.st_mtime_ns, stat.st_size)
+            changed = resolved not in before or before[resolved] != current
+            if changed and stat.st_mtime_ns >= minimum_mtime_ns:
+                candidates.append((stat.st_mtime_ns, stat.st_size, resolved))
+        except OSError:
+            continue
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: (item[0], item[1]))[2]
+
+
+def all_clients_protocol_complete(client_logs: list[Path]) -> bool:
+    if len(client_logs) != 2:
+        return False
+    return all(
+        (received_end and received_bye)
+        for received_end, received_bye in
+        (client_protocol_state(path) for path in client_logs)
     )
 
 
@@ -256,36 +352,54 @@ def run_one_game(
     else:
         slot_commands = [("A", config["client_a"]), ("B", config["client_b"])]
 
+    server_exe = Path(config["server_exe"]).expanduser().resolve()
     server_log_path = game_dir / "server.log"
+    server_trace_copy = game_dir / "server_trace.txt"
     client_logs = [game_dir / "player_0.log", game_dir / "player_1.log"]
+    trace_dir = Path(config.get("server_trace_dir", str(server_exe.parent))).expanduser().resolve()
+    trace_pattern = str(config.get("server_trace_glob", "trace_*.txt"))
+    trace_snapshot = snapshot_server_traces(trace_dir, trace_pattern)
+
     server_process: subprocess.Popen[Any] | None = None
     client_processes: list[subprocess.Popen[Any] | None] = [None, None]
     client_return_codes: list[int | None] = [None, None]
     started_at = datetime.now(timezone.utc).isoformat()
+    started_at_ns = time.time_ns()
     failure: str | None = None
     timed_out = False
+    protocol_completed = False
+    server_terminated_after_protocol = False
+    server_shutdown_grace = max(0.0, float(config.get("server_exit_grace_seconds", 2.0)))
+    client_grace = max(0.0, float(config.get("client_exit_grace_seconds", 10.0)))
+    poll_interval = max(0.01, float(config.get("protocol_poll_interval_seconds", 0.10)))
 
     with server_log_path.open("w", encoding="utf-8", errors="replace") as server_log:
         client_streams = [
             path.open("w", encoding="utf-8", errors="replace") for path in client_logs
         ]
         try:
+            # The optional override exists for the Python integration test,
+            # which launches a short-lived fake server script on Windows too.
+            # Normal benchmark configs omit it and launch the course EXE.
+            server_command = config.get("server_command", [str(server_exe)])
+            if not isinstance(server_command, list) or not server_command:
+                raise ValueError("server_command must be a non-empty command array")
             server_process = subprocess.Popen(
-                [str(Path(config["server_exe"]).resolve())],
-                cwd=str(Path(config["server_exe"]).resolve().parent),
+                [str(value) for value in server_command],
+                cwd=str(server_exe.parent),
                 stdout=server_log,
                 stderr=subprocess.STDOUT,
             )
 
-            startup_delay = float(config.get("startup_delay_seconds", 2.0))
-            time.sleep(max(0.0, startup_delay))
+            startup_delay = max(0.0, float(config.get("startup_delay_seconds", 2.0)))
+            time.sleep(startup_delay)
             if server_process.poll() is not None:
                 raise RuntimeError(
                     f"Server exited during startup with code {server_process.returncode}"
                 )
 
-            inter_client_delay = float(config.get("inter_client_delay_seconds", 0.25))
-            for slot, (label, command) in enumerate(slot_commands):
+            inter_client_delay = max(0.0, float(config.get("inter_client_delay_seconds", 0.25)))
+            for slot, (_label, command) in enumerate(slot_commands):
                 client_processes[slot] = subprocess.Popen(
                     [str(value) for value in command],
                     cwd=str(Path(command[0]).resolve().parent),
@@ -295,7 +409,9 @@ def run_one_game(
                 if slot == 0 and inter_client_delay > 0:
                     time.sleep(inter_client_delay)
 
-            duration_parts = [int(part) for part in settings.get("MaxGameDuration", "00:05:00").split(":")]
+            duration_parts = [
+                int(part) for part in settings.get("MaxGameDuration", "00:05:00").split(":")
+            ]
             if len(duration_parts) == 3:
                 configured_game_seconds = (
                     duration_parts[0] * 3600 + duration_parts[1] * 60 + duration_parts[2]
@@ -304,37 +420,105 @@ def run_one_game(
                 configured_game_seconds = duration_parts[0] * 60 + duration_parts[1]
             else:
                 raise ValueError("MaxGameDuration must use HH:MM:SS or MM:SS")
-            timeout = float(
-                config.get("server_timeout_seconds", configured_game_seconds + 30.0)
-            )
-            try:
-                server_process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                failure = f"Server exceeded timeout of {timeout:.1f} seconds"
-                terminate_process(server_process)
 
-            client_grace = float(config.get("client_exit_grace_seconds", 10.0))
-            for slot, process in enumerate(client_processes):
-                if process is None:
-                    continue
+            timeout = max(
+                0.1,
+                float(config.get("server_timeout_seconds", configured_game_seconds + 30.0)),
+            )
+            match_deadline = time.monotonic() + timeout
+
+            # END and BYE are sent independently to both clients. Do not wait
+            # for the server process: this server can keep its console process
+            # alive after a completed match.
+            while True:
+                if all_clients_protocol_complete(client_logs):
+                    protocol_completed = True
+                    break
+
+                finished_without_closure = [
+                    slot
+                    for slot, process in enumerate(client_processes)
+                    if process is not None
+                    and process.poll() is not None
+                    and not all(client_protocol_state(client_logs[slot]))
+                ]
+                if finished_without_closure:
+                    failure = (
+                        "Client process(es) exited before receiving both END and BYE: "
+                        + ", ".join(str(slot) for slot in finished_without_closure)
+                    )
+                    break
+
+                if time.monotonic() >= match_deadline:
+                    timed_out = True
+                    failure = (
+                        f"Match did not deliver END and BYE to both clients within "
+                        f"{timeout:.1f} seconds"
+                    )
+                    break
+
+                time.sleep(poll_interval)
+
+            # Give both clients a short opportunity to close normally after BYE.
+            if protocol_completed:
+                for slot, process in enumerate(client_processes):
+                    if process is None:
+                        continue
+                    try:
+                        client_return_codes[slot] = process.wait(timeout=client_grace)
+                    except subprocess.TimeoutExpired:
+                        failure = failure or (
+                            f"Player {slot} received END/BYE but did not exit within "
+                            f"{client_grace:.1f} seconds"
+                        )
+                        terminate_process(process)
+                        client_return_codes[slot] = process.returncode
+            else:
+                for slot, process in enumerate(client_processes):
+                    if process is not None and process.poll() is not None:
+                        client_return_codes[slot] = process.returncode
+
+            # Some versions of the course server keep running after sending
+            # END/BYE. Allow a brief graceful shutdown, then stop it as cleanup.
+            if server_process is not None and server_process.poll() is None:
                 try:
-                    client_return_codes[slot] = process.wait(timeout=client_grace)
+                    server_process.wait(timeout=server_shutdown_grace)
                 except subprocess.TimeoutExpired:
-                    failure = failure or f"Player {slot} did not exit after server shutdown"
-                    terminate_process(process)
-                    client_return_codes[slot] = process.returncode
+                    if protocol_completed:
+                        server_terminated_after_protocol = True
+                    terminate_process(server_process)
 
         except Exception as error:  # Capture per-game failure and preserve logs.
             failure = f"{type(error).__name__}: {error}"
         finally:
-            for process in client_processes:
+            for slot, process in enumerate(client_processes):
                 terminate_process(process)
+                if process is not None and client_return_codes[slot] is None:
+                    client_return_codes[slot] = process.poll()
             terminate_process(server_process)
             for stream in client_streams:
                 stream.close()
 
-    server_metrics = parse_server_log(server_log_path)
+    # The server writes its diagnostic trace beside the executable, not to
+    # stdout. Copy (never move) the trace created/modified during this game.
+    trace_source = find_new_server_trace(
+        trace_dir, trace_pattern, trace_snapshot, started_at_ns
+    )
+    server_metrics_source = "unavailable"
+    metrics_path = server_log_path
+    if trace_source is not None:
+        try:
+            shutil.copy2(trace_source, server_trace_copy)
+            metrics_path = server_trace_copy
+            server_metrics_source = "server_trace_file"
+        except OSError as error:
+            failure = failure or f"Could not copy server trace {trace_source}: {error}"
+    elif server_log_path.stat().st_size > 0:
+        # Preserve compatibility with server builds that write diagnostics to
+        # stdout/stderr. An empty stdout log is not treated as valid evidence.
+        server_metrics_source = "server_stdout_fallback"
+
+    server_metrics = parse_server_log(metrics_path)
     clients = []
     for slot, ((label, _command), log_path) in enumerate(zip(slot_commands, client_logs)):
         metrics = parse_client_log(log_path, label, client_return_codes[slot])
@@ -345,9 +529,22 @@ def run_one_game(
             "local_budget_overruns": metrics.local_budget_overruns,
         })
 
-    # The server's END/BYE frames do not include the winner/final board.
-    # A complete protocol termination is therefore not equivalent to a result.
-    completed = server_metrics.end_bye_messages >= 2 and not timed_out
+    # Protocol completion is established per connection. Server trace END/BYE
+    # lines are corroborating evidence, not a prerequisite for client closure.
+    completed = all(
+        client["received_end"] and client["received_bye"]
+        for client in clients
+    )
+    for slot, client in enumerate(clients):
+        if client["return_code"] not in (None, 0) and failure is None:
+            failure = (
+                f"Player {slot} exited with return code {client['return_code']}"
+            )
+    if completed != protocol_completed:
+        # Prefer the durable, post-run log parse if a client flushed its final
+        # messages just after the polling loop observed process exit.
+        protocol_completed = completed
+
     return {
         "game": game_number,
         "started_at_utc": started_at,
@@ -356,13 +553,17 @@ def run_one_game(
         "completed_protocol": completed,
         "winner": None,
         "winner_status": "not_exposed_by_verified_protocol",
-        "timed_out": timed_out,
+        "timed_out": timed_out and not completed,
         "failure": failure,
         "server_return_code": server_process.returncode if server_process else None,
+        "server_terminated_after_protocol": server_terminated_after_protocol,
+        "server_metrics_source": server_metrics_source,
+        "server_trace_source": str(trace_source) if trace_source else None,
         "server": asdict(server_metrics),
         "clients": clients,
         "logs": {
             "server": str(server_log_path),
+            "server_trace": str(server_trace_copy) if trace_source else None,
             "player_0": str(client_logs[0]),
             "player_1": str(client_logs[1]),
         },
@@ -372,11 +573,14 @@ def run_one_game(
 def _write_csv(path: Path, games: list[dict[str, Any]]) -> None:
     columns = [
         "game", "slot_0_agent", "slot_1_agent", "completed_protocol",
-        "winner", "winner_status", "plies", "mov_packets", "zero_move_packets",
+        "winner", "winner_status", "server_metrics_source", "server_trace_found",
+        "server_terminated_after_protocol", "plies", "mov_packets", "zero_move_packets",
         "malformed_mov_packets", "max_moves_in_one_packet", "rejection_markers",
-        "player_0_species", "player_0_decisions", "player_0_mean_ms",
+        "player_0_species", "player_0_connected_and_initialized",
+        "player_0_received_end", "player_0_received_bye", "player_0_decisions", "player_0_mean_ms",
         "player_0_max_ms", "player_0_local_budget_overruns",
-        "player_1_species", "player_1_decisions", "player_1_mean_ms",
+        "player_1_species", "player_1_connected_and_initialized",
+        "player_1_received_end", "player_1_received_bye", "player_1_decisions", "player_1_mean_ms",
         "player_1_max_ms", "player_1_local_budget_overruns", "failure",
     ]
     with path.open("w", newline="", encoding="utf-8") as stream:
@@ -392,6 +596,9 @@ def _write_csv(path: Path, games: list[dict[str, Any]]) -> None:
                 "completed_protocol": game["completed_protocol"],
                 "winner": game["winner"],
                 "winner_status": game["winner_status"],
+                "server_metrics_source": game["server_metrics_source"],
+                "server_trace_found": game["server_trace_source"] is not None,
+                "server_terminated_after_protocol": game["server_terminated_after_protocol"],
                 "plies": server["plies"],
                 "mov_packets": server["mov_packets"],
                 "zero_move_packets": server["zero_move_packets"],
@@ -399,11 +606,17 @@ def _write_csv(path: Path, games: list[dict[str, Any]]) -> None:
                 "max_moves_in_one_packet": server["max_moves_in_one_packet"],
                 "rejection_markers": server["cheat_or_rejection_markers"],
                 "player_0_species": p0["species"],
+                "player_0_connected_and_initialized": p0["connected_and_initialized"],
+                "player_0_received_end": p0["received_end"],
+                "player_0_received_bye": p0["received_bye"],
                 "player_0_decisions": p0["decision_count"],
                 "player_0_mean_ms": p0["mean_ms"],
                 "player_0_max_ms": p0["max_ms"],
                 "player_0_local_budget_overruns": p0["local_budget_overruns"],
                 "player_1_species": p1["species"],
+                "player_1_connected_and_initialized": p1["connected_and_initialized"],
+                "player_1_received_end": p1["received_end"],
+                "player_1_received_bye": p1["received_bye"],
                 "player_1_decisions": p1["decision_count"],
                 "player_1_mean_ms": p1["mean_ms"],
                 "player_1_max_ms": p1["max_ms"],
@@ -424,6 +637,8 @@ def _aggregate(games: list[dict[str, Any]]) -> dict[str, Any]:
         "games_completed_protocol": len(completed),
         "games_timed_out": sum(1 for game in games if game["timed_out"]),
         "games_with_failures": sum(1 for game in games if game["failure"]),
+        "games_with_server_trace": sum(1 for game in games if game["server_trace_source"]),
+        "games_missing_server_trace": sum(1 for game in games if not game["server_trace_source"]),
         "winner_rate": None,
         "winner_rate_status": "unavailable_until_winner_signal_is_observable",
         "total_zero_move_packets": sum(g["server"]["zero_move_packets"] for g in games),
@@ -483,6 +698,7 @@ def main() -> int:
         print(
             f"  protocol_complete={game['completed_protocol']} "
             f"plies={game['server']['plies']} "
+            f"server_metrics_source={game['server_metrics_source']} "
             f"failure={game['failure'] or 'none'}"
         )
         (run_dir / f"game_{game_number:03d}.json").write_text(
@@ -496,6 +712,10 @@ def main() -> int:
 
     print(f"\nResults written to: {run_dir}")
     print(f"Protocol-complete games: {summary['games_completed_protocol']}/{summary['games_requested']}")
+    print(
+        f"Games with server trace: {summary['games_with_server_trace']}/"
+        f"{summary['games_requested']}"
+    )
     print("Win rate: unavailable, the verified protocol does not expose a winner.")
     return 0 if summary["games_with_failures"] == 0 else 1
 

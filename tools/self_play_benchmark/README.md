@@ -1,9 +1,11 @@
 # Vampires vs Werewolves benchmark and TCP movement capture
 
-This folder contains the existing two-client benchmark runner plus an optional
-Npcap/Wireshark capture workflow. The capture workflow runs **around** the
-existing benchmark. It does not modify the game server, the client protocol, or
-`benchmark.py`.
+This folder contains the two-client benchmark runner and an optional
+Npcap/Wireshark capture workflow. The runner starts the course server and two
+client processes, detects protocol completion from each client's `END` and
+`BYE` messages, and collects the server trace file written beside the server
+executable. The capture wrapper runs **around** the benchmark and does not
+modify the game server or the client wire protocol.
 
 The purpose of the capture is to inspect the exact `MOV` commands submitted by
 both client instances when the server and both clients are running on the same
@@ -104,13 +106,32 @@ server uses. Example only:
   "startup_delay_seconds": 2.0,
   "inter_client_delay_seconds": 0.25,
   "server_timeout_seconds": 330,
-  "client_exit_grace_seconds": 10
+  "client_exit_grace_seconds": 10,
+  "server_exit_grace_seconds": 2,
+  "protocol_poll_interval_seconds": 0.1,
+  "server_trace_glob": "trace_*.txt"
 }
 ```
 
 Use forward slashes in JSON paths. Keep `PlayersCount=2` and
-`AutoRestart=False` in the server's `.exe.config`, as required by the existing
-benchmark runner.
+`AutoRestart=False` in the server's `.exe.config`.
+
+The additional runner settings are:
+
+- `server_timeout_seconds`: maximum time to wait for both client connections
+'to receive `END` and `BYE`; it is not a wait-for-server-process-exit timer.
+- `client_exit_grace_seconds`: time allowed for each client to exit normally
+  after receiving both closure messages.
+- `server_exit_grace_seconds`: time allowed for the server process to exit
+  after both clients have received closure messages. If it remains open, the
+  runner terminates it as post-match cleanup.
+- `protocol_poll_interval_seconds`: how frequently the runner checks the
+  client logs for closure messages.
+- `server_trace_glob`: filename pattern for server trace files, defaulting to
+  `trace_*.txt`.
+- `server_trace_dir` (optional): directory containing the trace file. When
+  omitted, the runner searches beside `server_exe`, which is where the tested
+  course server wrote its traces.
 
 ### 3. Run the Python tests before capturing
 
@@ -118,7 +139,8 @@ benchmark runner.
 py -3 -m unittest discover -s .\tests -v
 ```
 
-The tests exercise the existing benchmark log parsers and the new TCP
+The tests exercise the benchmark log parsers, per-client protocol completion,
+server trace discovery, the persistent-server cleanup path, and the TCP
 reassembly/MOV decoder. They do not replace a real Windows server smoke test.
 
 ## B. Identify the correct capture interface
@@ -176,8 +198,24 @@ The wrapper performs these operations:
 4. Waits for the benchmark to finish, then stops `dumpcap` cleanly.
 5. Runs `analyze_capture.py` against the saved `.pcapng` file.
 
-The original `benchmark.py` remains unchanged and still creates the usual game
-logs and benchmark summary. The capture wrapper does not edit your config.
+The capture wrapper does not edit your config. The benchmark runner also
+collects the server's `trace_*.txt` file from beside the server executable,
+copies it to each `game_NNN/server_trace.txt`, and parses metrics from that
+trace. `server.log` is still preserved as the server's stdout/stderr log.
+
+The runner now considers a match protocol-complete when **both client logs
+contain both `[RX] END` and `[RX] BYE`**. It does not wait for the server process
+to exit. After client closure it gives the server a short configurable shutdown
+grace, then terminates it as cleanup if the course server remains open. This
+cleanup is not classified as a match timeout.
+
+The result JSON and CSV include `server_metrics_source`, `server_trace_source`,
+per-player `received_end`/`received_bye`, and
+`server_terminated_after_protocol`. If no trace or non-empty stdout is found,
+`server_metrics_source` is `unavailable`; zero parser counts in that case must
+not be interpreted as true zero server events. A trace file is selected only
+when it is new or changed during the current game, so a previous game's trace
+is not silently reused. The source file is copied, not moved or modified.
 
 To capture more than one interface, repeat the option, for example:
 
@@ -187,6 +225,29 @@ py -3 .\capture_and_benchmark.py --config .\benchmark_config.json --interface 4 
 
 Prefer one known-correct interface for the first run. Capturing duplicate
 copies of the same connection on multiple interfaces can complicate analysis.
+
+### Enable NGS movement diagnostics for a strategic run
+
+To record the exact movement selected by each client, set the diagnostic
+variable before starting the benchmark. Build the client after applying the
+current NGS diagnostic change. The additional `[NGS_DIAG]` fields include the
+candidate count and each selected movement as
+`source_x,source_y:creature_count->target_x,target_y`.
+
+```powershell
+$env:VVW_NGS_DIAGNOSTICS = "1"
+try {
+    py -3 .\capture_and_benchmark.py --config .\benchmark_config.json --interface 4
+}
+finally {
+    Remove-Item Env:VVW_NGS_DIAGNOSTICS -ErrorAction SilentlyContinue
+}
+```
+
+Use the actual interface number from `dumpcap -D`. The diagnostics are written
+to `player_0.log` and `player_1.log` because the benchmark captures each
+client's standard output and standard error. They are disabled when the
+variable is absent, so normal competition runs remain quiet.
 
 ### 6. Output files
 
@@ -198,6 +259,7 @@ benchmark_results/
 │   ├── manifest.json
 │   ├── game_001/
 │   │   ├── server.log
+│   │   ├── server_trace.txt
 │   │   ├── player_0.log
 │   │   └── player_1.log
 │   ├── game_001.json

@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace vvw::ngs {
@@ -38,7 +40,8 @@ std::uint64_t totalPopulation(
 // other creatures; this is a strategic distance estimate, not pathfinding.
 std::vector<int> buildDistanceMap(
     const BoardState& board,
-    Species species
+    Species species,
+    Population minimumGroupPopulation
 ) {
     const std::size_t count = board.cells.size();
     std::vector<int> distance(count, -1);
@@ -46,7 +49,7 @@ std::vector<int> buildDistanceMap(
     queue.reserve(count);
 
     for (std::size_t i = 0; i < count; ++i) {
-        if (populationFor(board.cells[i], species) > 0) {
+        if (populationFor(board.cells[i], species) >= minimumGroupPopulation) {
             distance[i] = 0;
             queue.push_back(i);
         }
@@ -112,23 +115,41 @@ double calculateHumanPotential(
     return potential;
 }
 
-// Houses are strategic objectives, not interchangeable with ordinary
-// human cells. This feature values their accessibility from both sides.
+// Houses are strategic objectives. Unlike ordinary human potential, a house
+// should not appear close to being secured merely because a small detached
+// group is nearby. Only groups large enough to convert the house population
+// deterministically contribute to this objective score. Smaller groups can
+// still win a random encounter, but that uncertain outcome is not credited as
+// guaranteed capture potential here.
 double calculateHousePotential(
     const BoardState& board,
-    const std::vector<int>& distance
-) noexcept {
+    Species species
+) {
     double potential = 0.0;
+    std::unordered_map<Population, std::vector<int>> distancesByHousePopulation;
 
     for (std::size_t i = 0; i < board.cells.size(); ++i) {
-        const Cell& cell = board.cells[i];
-        if (!cell.isHouse || cell.humans == 0 || distance[i] < 0) {
+        const Cell& target = board.cells[i];
+        if (!target.isHouse || target.humans == 0) {
+            continue;
+        }
+
+        auto distanceIt = distancesByHousePopulation.find(target.humans);
+        if (distanceIt == distancesByHousePopulation.end()) {
+            auto distances = buildDistanceMap(board, species, target.humans);
+            distanceIt = distancesByHousePopulation.emplace(
+                target.humans, std::move(distances)
+            ).first;
+        }
+
+        const int distance = distanceIt->second[i];
+        if (distance < 0) {
             continue;
         }
 
         const double closeness =
-            1.0 / (1.0 + static_cast<double>(distance[i]));
-        potential += static_cast<double>(cell.humans) * closeness;
+            1.0 / (1.0 + static_cast<double>(distance));
+        potential += static_cast<double>(target.humans) * closeness;
     }
 
     return potential;
@@ -455,23 +476,27 @@ EvaluationResult evaluatePosition(
         static_cast<double>(result.features.ownPopulation) -
         static_cast<double>(result.features.opponentPopulation);
 
-    const std::vector<int> ownDistances =
-        buildDistanceMap(board, perspectiveSpecies);
-    const std::vector<int> opponentDistances =
-        buildDistanceMap(board, opponentSpecies);
+    // Keep ordinary human attraction based on the nearest group, as before.
+    // House attraction is stricter: only a group large enough to guarantee
+    // conversion is considered. This prevents a nearby singleton from
+    // masking a main force's opportunity to approach a viable house.
+    const std::vector<int> ownDistance =
+        buildDistanceMap(board, perspectiveSpecies, 1);
+    const std::vector<int> opponentDistance =
+        buildDistanceMap(board, opponentSpecies, 1);
 
     result.features.ownHumanPotential =
-        calculateHumanPotential(board, ownDistances);
+        calculateHumanPotential(board, ownDistance);
     result.features.opponentHumanPotential =
-        calculateHumanPotential(board, opponentDistances);
+        calculateHumanPotential(board, opponentDistance);
     result.features.humanPotentialAdvantage =
         result.features.ownHumanPotential -
         result.features.opponentHumanPotential;
 
     result.features.ownHousePotential =
-        calculateHousePotential(board, ownDistances);
+        calculateHousePotential(board, perspectiveSpecies);
     result.features.opponentHousePotential =
-        calculateHousePotential(board, opponentDistances);
+        calculateHousePotential(board, opponentSpecies);
     result.features.housePotentialAdvantage =
         result.features.ownHousePotential -
         result.features.opponentHousePotential;

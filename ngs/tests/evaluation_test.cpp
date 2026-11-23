@@ -274,8 +274,8 @@ void testHorizonCountersBeyondLimitsAreClampedSafely() {
 
 void testHousePotentialRewardsContestedHouseAccess() {
     BoardState board = makeBoard(5, 5);
-    cell(board, 0, 0).vampires = 5;
-    cell(board, 4, 4).werewolves = 5;
+    cell(board, 0, 0).vampires = 10;
+    cell(board, 4, 4).werewolves = 10;
     cell(board, 1, 0).humans = 8;
     cell(board, 1, 0).isHouse = true;
 
@@ -303,8 +303,8 @@ void testHousePotentialRewardsContestedHouseAccess() {
 
 void testOrdinaryHumansDoNotReceiveHouseObjectiveBonus() {
     BoardState houseBoard = makeBoard(5, 5);
-    cell(houseBoard, 0, 0).vampires = 5;
-    cell(houseBoard, 4, 4).werewolves = 5;
+    cell(houseBoard, 0, 0).vampires = 10;
+    cell(houseBoard, 4, 4).werewolves = 10;
     cell(houseBoard, 1, 0).humans = 8;
     cell(houseBoard, 1, 0).isHouse = true;
 
@@ -328,6 +328,76 @@ void testOrdinaryHumansDoNotReceiveHouseObjectiveBonus() {
     assert(houseResult.features.housePotentialAdvantage > 0.0);
     assert(ordinaryResult.features.housePotentialAdvantage == 0.0);
     assert(houseResult.features.totalScore > ordinaryResult.features.totalScore);
+}
+
+
+void testSmallGroupCannotMaskCaptureCapableHouseDistance() {
+    BoardState board = makeBoard(7, 7);
+    cell(board, 0, 0).vampires = 6;
+    cell(board, 4, 4).vampires = 1; // Close, but cannot convert it deterministically.
+    cell(board, 5, 4).humans = 6;
+    cell(board, 5, 4).isHouse = true;
+
+    EvaluationWeights weights;
+    weights.population = 0.0;
+    weights.humanPotential = 0.0;
+    weights.housePotential = 1.0;
+    weights.threatExposure = 0.0;
+    weights.fragmentation = 0.0;
+
+    const auto withSingleton = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves, weights);
+    assert(withSingleton.valid());
+
+    // The eligible six-creature group is five Chebyshev steps away. The
+    // nearby singleton must not make the six-human house look one step away.
+    const double expected = 6.0 / 6.0;
+    assert(std::abs(withSingleton.features.ownHousePotential - expected) < 1e-9);
+
+    cell(board, 1, 1).vampires = 6;
+    cell(board, 0, 0).vampires = 0;
+    const auto mainGroupAdvanced = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves, weights);
+    assert(mainGroupAdvanced.valid());
+    assert(mainGroupAdvanced.features.ownHousePotential >
+           withSingleton.features.ownHousePotential);
+}
+
+void testReportedSelfPlayMapHasViableHouseGradient() {
+    BoardState board = makeBoard(20, 20);
+    cell(board, 19, 16).vampires = 20;
+    cell(board, 1, 2).werewolves = 20;
+
+    const Position houses[] = {
+        {3, 14}, {6, 4}, {7, 15}, {12, 4}, {13, 15}, {16, 5}
+    };
+    const Population humans[] = {6, 37, 28, 28, 37, 6};
+    for (std::size_t i = 0; i < 6; ++i) {
+        cell(board, houses[i].x, houses[i].y).humans = humans[i];
+        cell(board, houses[i].x, houses[i].y).isHouse = true;
+    }
+
+    EvaluationWeights weights;
+    weights.population = 0.0;
+    weights.humanPotential = 0.0;
+    weights.housePotential = 1.0;
+    weights.threatExposure = 0.0;
+    weights.fragmentation = 0.0;
+
+    const auto before = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves, weights);
+    assert(before.valid());
+
+    // A 20-creature group can convert the two six-human houses
+    // deterministically, but not the 28- or 37-human houses. Advancing
+    // diagonally toward its viable house
+    // should therefore improve its objective potential.
+    cell(board, 19, 16).vampires = 0;
+    cell(board, 18, 15).vampires = 20;
+    const auto after = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves, weights);
+    assert(after.valid());
+    assert(after.features.ownHousePotential > before.features.ownHousePotential);
 }
 
 void testNegativeHousePotentialWeightIsRejected() {
@@ -363,6 +433,8 @@ int main() {
     testSmallDisconnectedGroupGetsFragmentationPenalty();
     testHousePotentialRewardsContestedHouseAccess();
     testOrdinaryHumansDoNotReceiveHouseObjectiveBonus();
+    testSmallGroupCannotMaskCaptureCapableHouseDistance();
+    testReportedSelfPlayMapHasViableHouseGradient();
     testNegativeHousePotentialWeightIsRejected();
     testUnknownHorizonPreservesLegacyWeights();
     testEarlyHorizonKeepsBaseWeights();

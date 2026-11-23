@@ -138,8 +138,21 @@ void logDecisionDiagnostics(const AgentDecision& decision) {
          << decision.candidateGenerationMicroseconds
          << " predictor_us=" << search.predictionElapsedMicroseconds
          << " response_search_us=" << search.searchElapsedMicroseconds
+         << " candidates_generated=" << decision.candidatesGenerated
          << " root_candidates=" << decision.rootCandidatesEvaluated
-         << " deadline_exceeded=" << (decision.deadlineExceeded ? 1 : 0)
+         << " selected_move_count=" << decision.plan.moves.size();
+
+    // Include the exact chosen plan in diagnostics. This is intentionally
+    // behind VVW_NGS_DIAGNOSTICS so normal competition logs stay unchanged.
+    for (std::size_t i = 0; i < decision.plan.moves.size(); ++i) {
+        const vvw::game::Move& move = decision.plan.moves[i];
+        line << " selected_move_" << i
+             << '=' << move.source.x << ',' << move.source.y
+             << ':' << move.count
+             << "->" << move.destination.x << ',' << move.destination.y;
+    }
+
+    line << " deadline_exceeded=" << (decision.deadlineExceeded ? 1 : 0)
          << " elapsed_us=" << decision.elapsedMicroseconds;
 
     std::cerr << line.str() << '\n';
