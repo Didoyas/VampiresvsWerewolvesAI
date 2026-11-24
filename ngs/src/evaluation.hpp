@@ -10,7 +10,9 @@ namespace vvw::ngs {
 // These are initial heuristic values and should be tuned with self-play.
 struct EvaluationWeights {
     double population{1.0};
-    // Attraction to ordinary human cells, measured from the nearest group.
+    // Attraction to ordinary human cells, measured from the nearest group
+    // capable of contesting that human population. A nearby singleton cannot
+    // dominate the score for a large human cluster.
     double humanPotential{0.35};
     // Additional value for winning the race to active human houses. House
     // distance is measured only from groups large enough to convert the
@@ -84,7 +86,8 @@ struct EvaluationResult {
 // Evaluate a board from perspectiveSpecies' point of view.
 // sideToMove is the species that can make the next move. It is required so
 // threat estimates only model attacks that are immediately available to the
-// next player and can apply the previous-ply movement footprint correctly.
+// next player. Cross-ply movement-footprint restrictions are not part of the
+// assignment rules and are not applied.
 // Higher scores are better for perspectiveSpecies.
 EvaluationResult evaluatePosition(
     const BoardState& board,

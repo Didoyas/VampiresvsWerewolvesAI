@@ -82,6 +82,74 @@ void testHumanPotentialFavoursCloserSpecies() {
     assert(result.features.humanPotentialAdvantage > 0.0);
 }
 
+
+void testSingletonDoesNotPullTowardLargeHumanCluster() {
+    BoardState board = makeBoard(7, 7);
+    cell(board, 0, 0).vampires = 10;
+    cell(board, 5, 6).vampires = 1;
+    cell(board, 6, 6).humans = 20;
+
+    EvaluationWeights weights;
+    weights.population = 0.0;
+    weights.housePotential = 0.0;
+    weights.threatExposure = 0.0;
+    weights.fragmentation = 0.0;
+
+    const auto withSingleton = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves, weights);
+    assert(withSingleton.valid());
+    assert(std::abs(
+        withSingleton.features.ownHumanPotential - (10.0 / 7.0)) < 1e-12);
+
+    // Removing the singleton must not change attraction to a 20-human target.
+    cell(board, 5, 6).vampires = 0;
+    const auto withoutSingleton = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves, weights);
+    assert(withoutSingleton.valid());
+    assert(std::abs(
+        withSingleton.features.ownHumanPotential -
+        withoutSingleton.features.ownHumanPotential) < 1e-12);
+}
+
+void testSmallGroupsCanStillPursueFeasibleSmallHumanGroups() {
+    BoardState board = makeBoard(5, 5);
+    cell(board, 0, 0).vampires = 1;
+    cell(board, 1, 0).humans = 1;
+    cell(board, 4, 4).vampires = 2;
+    cell(board, 3, 4).humans = 2;
+
+    EvaluationWeights weights;
+    weights.population = 0.0;
+    weights.housePotential = 0.0;
+    weights.threatExposure = 0.0;
+    weights.fragmentation = 0.0;
+
+    const auto result = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves, weights);
+
+    assert(result.valid());
+    // A singleton can pursue one human, and a pair can pursue two humans.
+    assert(result.features.ownHumanPotential > 1.49);
+}
+
+void testPairDoesNotAttractToUnconvertibleLargeHumanGroup() {
+    BoardState board = makeBoard(5, 5);
+    cell(board, 0, 0).vampires = 2;
+    cell(board, 1, 0).humans = 10;
+
+    EvaluationWeights weights;
+    weights.population = 0.0;
+    weights.housePotential = 0.0;
+    weights.threatExposure = 0.0;
+    weights.fragmentation = 0.0;
+
+    const auto result = evaluatePosition(
+        board, Species::Vampires, Species::Werewolves, weights);
+
+    assert(result.valid());
+    assert(result.features.ownHumanPotential == 0.0);
+}
+
 void testNoThreatWithoutAdjacentEnemy() {
     BoardState board = makeBoard(5, 5);
     cell(board, 0, 0).vampires = 10;
@@ -116,28 +184,24 @@ void testThreatSignDependsOnSideToMove() {
     assert(werewolvesMove.features.threatAdvantage > 0.0);
 }
 
-void testPreviousPlyFootprintBlocksThreatEstimate() {
+void testPreviousPlyFootprintDoesNotSuppressThreatEstimate() {
     BoardState board = makeBoard(3, 3);
     const Position defended{1, 1};
     const Position attacker{0, 0};
     cell(board, defended.x, defended.y).werewolves = 4;
     cell(board, attacker.x, attacker.y).vampires = 4;
 
-    const auto unblocked = evaluatePosition(
+    const auto baseline = evaluatePosition(
         board, Species::Werewolves, Species::Vampires);
-    assert(unblocked.features.expectedThreatenedPopulation > 0.0);
+    assert(baseline.features.expectedThreatenedPopulation > 0.0);
 
     board.previousPly.known = true;
     board.previousPly.sources.push_back(defended);
-    const auto targetBlocked = evaluatePosition(
-        board, Species::Werewolves, Species::Vampires);
-    assert(targetBlocked.features.expectedThreatenedPopulation == 0.0);
-
-    board.previousPly.sources.clear();
     board.previousPly.destinations.push_back(attacker);
-    const auto sourceBlocked = evaluatePosition(
+    const auto withFootprint = evaluatePosition(
         board, Species::Werewolves, Species::Vampires);
-    assert(sourceBlocked.features.expectedThreatenedPopulation == 0.0);
+    assert(withFootprint.features.expectedThreatenedPopulation ==
+           baseline.features.expectedThreatenedPopulation);
 }
 
 void testSmallDisconnectedGroupGetsFragmentationPenalty() {
@@ -427,9 +491,12 @@ int main() {
     testInvalidSpecies();
     testPopulationAdvantageAndPerspectiveSymmetry();
     testHumanPotentialFavoursCloserSpecies();
+    testSingletonDoesNotPullTowardLargeHumanCluster();
+    testSmallGroupsCanStillPursueFeasibleSmallHumanGroups();
+    testPairDoesNotAttractToUnconvertibleLargeHumanGroup();
     testNoThreatWithoutAdjacentEnemy();
     testThreatSignDependsOnSideToMove();
-    testPreviousPlyFootprintBlocksThreatEstimate();
+    testPreviousPlyFootprintDoesNotSuppressThreatEstimate();
     testSmallDisconnectedGroupGetsFragmentationPenalty();
     testHousePotentialRewardsContestedHouseAccess();
     testOrdinaryHumansDoNotReceiveHouseObjectiveBonus();

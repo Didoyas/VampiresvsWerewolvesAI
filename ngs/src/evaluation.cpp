@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <queue>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -34,33 +35,73 @@ std::uint64_t totalPopulation(
     return total;
 }
 
-// Multi-source breadth-first search over the board's eight-neighbour grid.
-// The result is the minimum number of legal one-cell movement steps to a
-// cell occupied by the requested species. Cells are not blocked by humans or
-// other creatures; this is a strategic distance estimate, not pathfinding.
-std::vector<int> buildDistanceMap(
+struct DistanceField {
+    std::vector<int> distance;
+    std::vector<Population> nearestSourcePopulation;
+};
+
+struct DistanceNode {
+    std::size_t index{0};
+    int distance{0};
+    Population sourcePopulation{0};
+};
+
+struct DistanceNodeLater {
+    bool operator()(const DistanceNode& left, const DistanceNode& right) const noexcept {
+        if (left.distance != right.distance) {
+            return left.distance > right.distance;
+        }
+        return left.sourcePopulation < right.sourcePopulation;
+    }
+};
+
+// Multi-source shortest-path field over the eight-neighbour grid. For equal
+// distances, prefer the strongest source group. This lets evaluation measure
+// whether a group has enough strength to exploit a nearby human opportunity,
+// rather than blindly rewarding the closest singleton.
+DistanceField buildDistanceMap(
     const BoardState& board,
     Species species,
     Population minimumGroupPopulation
 ) {
     const std::size_t count = board.cells.size();
-    std::vector<int> distance(count, -1);
-    std::vector<std::size_t> queue;
-    queue.reserve(count);
+    DistanceField field;
+    field.distance.assign(count, -1);
+    field.nearestSourcePopulation.assign(count, 0);
+
+    std::priority_queue<
+        DistanceNode,
+        std::vector<DistanceNode>,
+        DistanceNodeLater
+    > frontier;
 
     for (std::size_t i = 0; i < count; ++i) {
-        if (populationFor(board.cells[i], species) >= minimumGroupPopulation) {
-            distance[i] = 0;
-            queue.push_back(i);
+        const Population population = populationFor(board.cells[i], species);
+        if (population < minimumGroupPopulation) {
+            continue;
+        }
+
+        if (field.distance[i] == -1 ||
+            population > field.nearestSourcePopulation[i]) {
+            field.distance[i] = 0;
+            field.nearestSourcePopulation[i] = population;
+            frontier.push({i, 0, population});
         }
     }
 
-    std::size_t head = 0;
-    while (head < queue.size()) {
-        const std::size_t current = queue[head++];
-        const int x = static_cast<int>(current %
+    while (!frontier.empty()) {
+        const DistanceNode current = frontier.top();
+        frontier.pop();
+
+        if (field.distance[current.index] != current.distance ||
+            field.nearestSourcePopulation[current.index] !=
+                current.sourcePopulation) {
+            continue;
+        }
+
+        const int x = static_cast<int>(current.index %
                                        static_cast<std::size_t>(board.columns));
-        const int y = static_cast<int>(current /
+        const int y = static_cast<int>(current.index /
                                        static_cast<std::size_t>(board.columns));
 
         for (int dy = -1; dy <= 1; ++dy) {
@@ -80,36 +121,69 @@ std::vector<int> buildDistanceMap(
                     static_cast<std::size_t>(nextY) *
                         static_cast<std::size_t>(board.columns) +
                     static_cast<std::size_t>(nextX);
+                const int nextDistance = current.distance + 1;
 
-                if (distance[next] != -1) {
+                const bool shorter = field.distance[next] == -1 ||
+                                     nextDistance < field.distance[next];
+                const bool equallyNearButStronger =
+                    nextDistance == field.distance[next] &&
+                    current.sourcePopulation >
+                        field.nearestSourcePopulation[next];
+                if (!shorter && !equallyNearButStronger) {
                     continue;
                 }
 
-                distance[next] = distance[current] + 1;
-                queue.push_back(next);
+                field.distance[next] = nextDistance;
+                field.nearestSourcePopulation[next] =
+                    current.sourcePopulation;
+                frontier.push({
+                    next, nextDistance, current.sourcePopulation
+                });
             }
         }
     }
 
-    return distance;
+    return field;
 }
 
 double calculateHumanPotential(
     const BoardState& board,
-    const std::vector<int>& distance
+    const DistanceField& distanceForOneHuman,
+    const DistanceField& distanceForTwoHumans,
+    const DistanceField& distanceForUsefulGroup
 ) noexcept {
+    // A singleton may pursue a one-human cell, and a pair may pursue a
+    // two-human cell. For larger clusters, only groups of at least three are
+    // considered, and the value is capped by the nearest capable group's
+    // population. Consequently a nearby 1-creature fragment cannot outweigh
+    // a distant, productive main force.
     double potential = 0.0;
 
     for (std::size_t i = 0; i < board.cells.size(); ++i) {
         const Population humans = board.cells[i].humans;
-        if (humans == 0 || distance[i] < 0) {
+        if (humans == 0) {
             continue;
         }
 
-        // One step away has value 1/2, two steps 1/3, and so on.
+        const DistanceField* field = nullptr;
+        if (humans == 1) {
+            field = &distanceForOneHuman;
+        } else if (humans == 2) {
+            field = &distanceForTwoHumans;
+        } else {
+            field = &distanceForUsefulGroup;
+        }
+
+        if (field->distance[i] < 0 ||
+            field->nearestSourcePopulation[i] == 0) {
+            continue;
+        }
+
+        const Population effectiveTarget =
+            std::min(humans, field->nearestSourcePopulation[i]);
         const double closeness =
-            1.0 / (1.0 + static_cast<double>(distance[i]));
-        potential += static_cast<double>(humans) * closeness;
+            1.0 / (1.0 + static_cast<double>(field->distance[i]));
+        potential += static_cast<double>(effectiveTarget) * closeness;
     }
 
     return potential;
@@ -138,7 +212,7 @@ double calculateHousePotential(
         if (distanceIt == distancesByHousePopulation.end()) {
             auto distances = buildDistanceMap(board, species, target.humans);
             distanceIt = distancesByHousePopulation.emplace(
-                target.humans, std::move(distances)
+                target.humans, std::move(distances.distance)
             ).first;
         }
 
@@ -291,13 +365,6 @@ double calculateExpectedThreatenedPopulation(
                 continue;
             }
 
-            // The next player cannot move into a cell that was a source in
-            // the immediately preceding ply.
-            if (board.previousPly.known &&
-                board.previousPly.wasSource(defendedPosition)) {
-                continue;
-            }
-
             std::uint64_t adjacentAttackers = 0;
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
@@ -307,13 +374,6 @@ double calculateExpectedThreatenedPopulation(
 
                     const Position attackerPosition{x + dx, y + dy};
                     if (!board.inBounds(attackerPosition)) {
-                        continue;
-                    }
-
-                    // A cell that was a destination in the preceding ply
-                    // cannot be used as a source in the next ply.
-                    if (board.previousPly.known &&
-                        board.previousPly.wasDestination(attackerPosition)) {
                         continue;
                     }
 
@@ -476,19 +536,34 @@ EvaluationResult evaluatePosition(
         static_cast<double>(result.features.ownPopulation) -
         static_cast<double>(result.features.opponentPopulation);
 
-    // Keep ordinary human attraction based on the nearest group, as before.
-    // House attraction is stricter: only a group large enough to guarantee
-    // conversion is considered. This prevents a nearby singleton from
-    // masking a main force's opportunity to approach a viable house.
-    const std::vector<int> ownDistance =
+    // Human attraction is now ability-aware. A singleton can pursue a
+    // one-human cell, but it cannot make a 10-human cluster look like an
+    // immediately useful target. Groups of at least three provide the
+    // general-purpose human potential field; one- and two-human cells use
+    // matching lower thresholds.
+    const DistanceField ownDistanceForOne =
         buildDistanceMap(board, perspectiveSpecies, 1);
-    const std::vector<int> opponentDistance =
+    const DistanceField ownDistanceForTwo =
+        buildDistanceMap(board, perspectiveSpecies, 2);
+    const DistanceField ownDistanceForUsefulGroup =
+        buildDistanceMap(board, perspectiveSpecies, 3);
+    const DistanceField opponentDistanceForOne =
         buildDistanceMap(board, opponentSpecies, 1);
+    const DistanceField opponentDistanceForTwo =
+        buildDistanceMap(board, opponentSpecies, 2);
+    const DistanceField opponentDistanceForUsefulGroup =
+        buildDistanceMap(board, opponentSpecies, 3);
 
-    result.features.ownHumanPotential =
-        calculateHumanPotential(board, ownDistance);
-    result.features.opponentHumanPotential =
-        calculateHumanPotential(board, opponentDistance);
+    result.features.ownHumanPotential = calculateHumanPotential(
+        board,
+        ownDistanceForOne,
+        ownDistanceForTwo,
+        ownDistanceForUsefulGroup);
+    result.features.opponentHumanPotential = calculateHumanPotential(
+        board,
+        opponentDistanceForOne,
+        opponentDistanceForTwo,
+        opponentDistanceForUsefulGroup);
     result.features.humanPotentialAdvantage =
         result.features.ownHumanPotential -
         result.features.opponentHumanPotential;
