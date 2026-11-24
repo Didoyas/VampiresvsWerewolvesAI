@@ -111,11 +111,6 @@ bool Agent::validatePlan(
     const TurnPlan& plan
 ) const {
     ValidationOptions validationOptions;
-    // The wire protocol sends cell values, not the opponent's last MOV. The
-    // caller may provide a reconstructed footprint in future; until then we
-    // enforce every within-ply rule and all cross-ply rules when known.
-    validationOptions.requirePreviousPlyFootprint = board.previousPly.known;
-
     return validateTurnPlan(
         board,
         plan,
@@ -131,7 +126,7 @@ TurnPlan Agent::makeEmergencyFallback(const BoardState& board) const {
         {-1,  1}, {0,  1}, {1,  1}
     };
 
-    const ValidationOptions validationOptions{board.previousPly.known};
+    const ValidationOptions validationOptions{};
 
     // This is a safety response, not strategic search.
     // It must still run if the search deadline has expired.
@@ -201,7 +196,7 @@ AgentDecision Agent::chooseMove(
     AgentDecision decision;
     decision.turnNumber = nextTurnNumber_;
     decision.previousPlyWasUnknown = !board.previousPly.known;
-    decision.crossPlyRestrictionsChecked = board.previousPly.known;
+    decision.crossPlyRestrictionsChecked = false;
 
     const auto finish = [&]() {
         decision.elapsedMicroseconds = static_cast<std::uint64_t>(
@@ -263,8 +258,6 @@ AgentDecision Agent::chooseMove(
 
     MultiMoveCandidateOptions generationOptions =
         options_.candidateGenerationOptions;
-    generationOptions.singleMoveOptions.requirePreviousPlyFootprint =
-        board.previousPly.known;
 
     const auto candidateGenerationStartedAt = Clock::now();
     const MultiMoveCandidateResult generated =
@@ -298,10 +291,9 @@ AgentDecision Agent::chooseMove(
         searchOptions.rootRankingOptions.maxCandidatesToEvaluate,
         generated.candidates.size()
     );
-    searchOptions.rootRankingOptions.transitionOptions.requirePreviousPlyFootprint =
-        board.previousPly.known;
-    searchOptions.opponentGenerationOptions.singleMoveOptions.requirePreviousPlyFootprint =
-        true; // After our simulated move, its footprint is known.
+    // Do not carry the unsupported cross-ply footprint restriction into
+    // simulated root or opponent transitions. Same-ply conflicts remain
+    // enforced by validateTurnPlan().
 
     bool selectedBySearch = false;
     bool selectedByRootRankingFallback = false;

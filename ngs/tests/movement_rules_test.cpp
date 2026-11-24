@@ -17,7 +17,7 @@ BoardState createTestBoard() {
 
     board.ourSpecies = Species::Vampires;
 
-    // Make previous-ply information available by default.
+    // Populate the legacy footprint metadata; it must not affect legality.
     board.previousPly.known = true;
 
     // Our vampire groups.
@@ -233,67 +233,27 @@ void testMultipleSplitsExceedPopulation() {
            ValidationError::InsufficientSourcePopulation);
 }
 
-void testPreviousDestinationCannotBecomeSource() {
+void testPreviousPlyFootprintDoesNotRestrictMovement() {
     BoardState board = createTestBoard();
-
+    board.previousPly.known = true;
     board.previousPly.destinations.push_back({1, 1});
-
-    TurnPlan plan = createPlan({1, 1}, 10, {2, 1});
-
-    const auto result =
-        validateTurnPlan(board, plan, Species::Vampires);
-
-    assert(result.error ==
-           ValidationError::PreviousDestinationUsedAsSource);
-}
-
-void testPreviousSourceCannotBecomeDestination() {
-    BoardState board = createTestBoard();
-
     board.previousPly.sources.push_back({2, 1});
 
-    TurnPlan plan = createPlan({1, 1}, 10, {2, 1});
+    // Both movements would have been blocked by the old cross-ply rule.
+    // The assignment's same-ply constraints remain enforced separately.
+    const TurnPlan fromPreviousDestination =
+        createPlan({1, 1}, 10, {2, 1});
+    const TurnPlan intoPreviousSource =
+        createPlan({1, 1}, 10, {2, 1});
 
-    const auto result =
-        validateTurnPlan(board, plan, Species::Vampires);
-
-    assert(result.error ==
-           ValidationError::PreviousSourceUsedAsDestination);
-}
-
-void testMissingPreviousPlyFootprint() {
-    BoardState board = createTestBoard();
-
-    board.previousPly.known = false;
-
-    TurnPlan plan = createPlan({1, 1}, 10, {2, 1});
-
-    const auto result =
-        validateTurnPlan(board, plan, Species::Vampires);
-
-    assert(result.error ==
-           ValidationError::MissingPreviousPlyFootprint);
-}
-
-void testMissingPreviousFootprintWhenOptional() {
-    BoardState board = createTestBoard();
+    assert(validateTurnPlan(
+        board, fromPreviousDestination, Species::Vampires).valid());
+    assert(validateTurnPlan(
+        board, intoPreviousSource, Species::Vampires).valid());
 
     board.previousPly.known = false;
-
-    TurnPlan plan = createPlan({1, 1}, 10, {2, 1});
-
-    ValidationOptions options;
-    options.requirePreviousPlyFootprint = false;
-
-    const auto result =
-        validateTurnPlan(
-            board,
-            plan,
-            Species::Vampires,
-            options
-        );
-
-    assert(result.valid());
+    assert(validateTurnPlan(
+        board, fromPreviousDestination, Species::Vampires).valid());
 }
 
 void testSamePlySourceDestinationConflict() {
@@ -495,11 +455,7 @@ int main() {
     testMultipleSplitsWithinPopulation();
     testMultipleSplitsExceedPopulation();
 
-    testPreviousDestinationCannotBecomeSource();
-    testPreviousSourceCannotBecomeDestination();
-
-    testMissingPreviousPlyFootprint();
-    testMissingPreviousFootprintWhenOptional();
+    testPreviousPlyFootprintDoesNotRestrictMovement();
 
     testSamePlySourceDestinationConflict();
     testInvalidBoardStorage();

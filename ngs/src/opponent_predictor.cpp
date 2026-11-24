@@ -331,30 +331,6 @@ double calculateHouseHistoryScore(
     return bestScore;
 }
 
-bool violatesPreviousPly(
-    const BoardState& board,
-    Position source,
-    Position destination,
-    const OpponentPredictionOptions& options
-) noexcept {
-    if (!options.respectPreviousPlyRestrictions ||
-        !board.previousPly.known) {
-        return false;
-    }
-
-    // A previous destination cannot become this ply's source.
-    if (board.previousPly.wasDestination(source)) {
-        return true;
-    }
-
-    // A previous source cannot become this ply's destination.
-    if (board.previousPly.wasSource(destination)) {
-        return true;
-    }
-
-    return false;
-}
-
 double calculatePriorityScore(
     double directionProbability,
     double destinationPresenceFrequency,
@@ -559,16 +535,6 @@ OpponentPredictionResult predictOpponentBehaviour(
                 };
 
                 if (!board.inBounds(destination)) {
-                    continue;
-                }
-
-                if (violatesPreviousPly(
-                        board,
-                        source,
-                        destination,
-                        options)) {
-
-                    ++result.stats.destinationsRejectedByPreviousPly;
                     continue;
                 }
 

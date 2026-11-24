@@ -278,16 +278,16 @@ void testInvalidOptionsAreReported() {
     assert(result.error == MultiMoveCandidateError::InvalidOptions);
 }
 
-void testStageOneErrorsArePropagated() {
+void testGenerationDoesNotRequirePreviousPlyFootprint() {
     BoardState board = makeBoard();
+    board.at({2, 2}).vampires = 10;
     board.previousPly.known = false;
 
     const MultiMoveCandidateResult result =
         generateMultiMoveCandidates(board, Species::Vampires);
 
-    assert(!result.valid());
-    assert(result.error ==
-           MultiMoveCandidateError::MissingPreviousPlyFootprint);
+    assert(result.valid());
+    assert(!result.candidates.empty());
 }
 
 void testGenerationIsDeterministic() {
@@ -657,7 +657,7 @@ int main() {
     testCandidateQuotasAreRespected();
     testCombinationAttemptBudgetIsEnforced();
     testInvalidOptionsAreReported();
-    testStageOneErrorsArePropagated();
+    testGenerationDoesNotRequirePreviousPlyFootprint();
     testGenerationIsDeterministic();
     testHighPriorityHouseApproachSurvivesSingleMoveQuota();
     testSingleMoveShortlistCoversDistinctGroupsBeforeSecondChoices();

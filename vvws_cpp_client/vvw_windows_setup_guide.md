@@ -172,9 +172,15 @@ The current shared types include:
 | `Cell` | Humans, vampires, werewolves and the `isHouse` flag for one cell. |
 | `Move` | Source position, population count and destination position. |
 | `TurnPlan` | Vector of moves returned for one turn. |
-| `PlyFootprint` | Whether the previous ply is known and its source/destination positions. |
+| `PlyFootprint` | Legacy metadata describing a simulated ply's source/destination positions. It is not a movement restriction. |
 | `GameHorizon` | Plies used/remaining and elapsed game time/remaining time. |
-| `BoardState` | Dimensions, cells, our species, previous-ply footprint and game horizon. |
+| `BoardState` | Dimensions, cells, our species, optional footprint metadata and game horizon. |
+
+Movement legality follows the assignment's current-turn rules: adjacency, source
+population, wire limits, aggregate arrivals and same-ply source/destination conflicts.
+The previous-ply footprint is not used to reject moves. The live TCP protocol does
+not send the opponent's preceding MOV packet, so the client must not infer that
+footprint from UPD snapshots.
 
 `BoardState` also provides helpers such as `inBounds()`, `index()`, `at()` and `hasValidStorage()`. Algorithms should use these shared semantics rather than inventing a second board layout.
 

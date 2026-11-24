@@ -86,12 +86,6 @@ ValidationResult validateTurnPlan(
         return failure(ValidationError::EmptyPlan);
     }
 
-    // 4. Cross-ply restrictions require the previous ply's footprint.
-    if (options.requirePreviousPlyFootprint &&
-        !board.previousPly.known) {
-        return failure(ValidationError::MissingPreviousPlyFootprint);
-    }
-
     // Accumulate outgoing populations for every source cell.
     // This catches multiple splits that collectively exceed the group size.
     std::vector<Population> outgoingByCell(board.cells.size(), 0);
@@ -197,26 +191,8 @@ ValidationResult validateTurnPlan(
             firstIncomingMoveIndex[destinationIndex] = moveIndex;
         }
 
-        // 6. Check restrictions against the previous ply.
-        if (board.previousPly.known) {
-            // A previous destination cannot become a current source.
-            if (board.previousPly.wasDestination(move.source)) {
-                return failure(
-                    ValidationError::PreviousDestinationUsedAsSource,
-                    moveIndex
-                );
-            }
-
-            // A previous source cannot become a current destination.
-            if (board.previousPly.wasSource(move.destination)) {
-                return failure(
-                    ValidationError::PreviousSourceUsedAsDestination,
-                    moveIndex
-                );
-            }
-        }
-
-        // Remember positions for same-ply validation.
+        // Remember positions for same-ply validation. Cross-ply footprints
+        // are not a rule in the assignment and must not constrain a plan.
         currentSources.push_back(move.source);
         currentDestinations.push_back(move.destination);
     }

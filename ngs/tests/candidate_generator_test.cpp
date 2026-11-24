@@ -113,59 +113,26 @@ void testEveryCandidateContainsExactlyOneMoveAndIsValid() {
     }
 }
 
-void testPreviousPlyRestrictionsAreApplied() {
+void testPreviousPlyFootprintDoesNotSuppressCandidates() {
     BoardState board = makeBoard();
     board.at({2, 2}).vampires = 100;
-
-    // A previous source cannot become a current destination.
+    board.previousPly.known = true;
     board.previousPly.sources.push_back({3, 2});
-
-    const CandidateGenerationResult result =
-        generateSingleMoveCandidates(board, Species::Vampires);
-
-    assert(result.valid());
-    assert(countsForSourceAndDestination(result, {2, 2}, {3, 2}).empty());
-    assert(result.stats.candidatesRejectedByValidator == 4);
-}
-
-void testPreviousDestinationCannotBeUsedAsSource() {
-    BoardState board = makeBoard();
-    board.at({2, 2}).vampires = 100;
     board.previousPly.destinations.push_back({2, 2});
 
     const CandidateGenerationResult result =
         generateSingleMoveCandidates(board, Species::Vampires);
 
     assert(result.valid());
-    assert(result.candidates.empty());
-}
-
-void testMissingPreviousFootprintIsReported() {
-    BoardState board = makeBoard();
-    board.at({2, 2}).vampires = 100;
-    board.previousPly.known = false;
-
-    const CandidateGenerationResult result =
-        generateSingleMoveCandidates(board, Species::Vampires);
-
-    assert(!result.valid());
-    assert(result.error ==
-           CandidateGenerationError::MissingPreviousPlyFootprint);
-}
-
-void testMissingPreviousFootprintCanBeAllowedForIsolatedTests() {
-    BoardState board = makeBoard();
-    board.at({2, 2}).vampires = 100;
-    board.previousPly.known = false;
-
-    CandidateGenerationOptions options;
-    options.requirePreviousPlyFootprint = false;
-
-    const CandidateGenerationResult result =
-        generateSingleMoveCandidates(board, Species::Vampires, options);
-
-    assert(result.valid());
+    assert(!countsForSourceAndDestination(
+        result, {2, 2}, {3, 2}).empty());
     assert(result.candidates.size() == 32);
+
+    board.previousPly.known = false;
+    const CandidateGenerationResult withoutFootprint =
+        generateSingleMoveCandidates(board, Species::Vampires);
+    assert(withoutFootprint.valid());
+    assert(withoutFootprint.candidates.size() == result.candidates.size());
 }
 
 void testInvalidBoardIsReported() {
@@ -220,10 +187,7 @@ int main() {
     testSmallPopulationRoundingAndDeduplication();
     testCountsRespectOneByteWireLimit();
     testEveryCandidateContainsExactlyOneMoveAndIsValid();
-    testPreviousPlyRestrictionsAreApplied();
-    testPreviousDestinationCannotBeUsedAsSource();
-    testMissingPreviousFootprintIsReported();
-    testMissingPreviousFootprintCanBeAllowedForIsolatedTests();
+    testPreviousPlyFootprintDoesNotSuppressCandidates();
     testInvalidBoardIsReported();
     testInvalidSpeciesIsReported();
     testInvalidSplitRatioIsReported();

@@ -45,7 +45,6 @@ enum class MultiMoveCandidateError {
     None,
     InvalidBoard,
     InvalidSpecies,
-    MissingPreviousPlyFootprint,
     InvalidSplitRatio,
     InvalidOptions
 };

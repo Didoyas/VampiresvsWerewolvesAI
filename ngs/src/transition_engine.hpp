@@ -13,13 +13,6 @@ namespace vvw::ngs {
 // -----------------------------------------------------------------------------
 
 struct TransitionOptions {
-    // The movement validator requires the previous ply's source/destination
-    // footprint unless this is explicitly disabled.
-    //
-    // Keep true for production. Disabling it is useful only when testing
-    // isolated transitions without previous-ply information.
-    bool requirePreviousPlyFootprint{true};
-
     // According to the official assignment PDF, when attackers win a random
     // battle against humans, surviving humans can be converted.
     //

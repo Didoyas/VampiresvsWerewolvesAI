@@ -17,9 +17,6 @@ enum class ValidationError {
     MovementExceedsWireLimit,
     InsufficientSourcePopulation,
     SamePlySourceDestinationConflict,
-    MissingPreviousPlyFootprint,
-    PreviousDestinationUsedAsSource,
-    PreviousSourceUsedAsDestination,
     DestinationPopulationExceedsWireLimit
 };
 
@@ -35,11 +32,9 @@ struct ValidationResult {
     }
 };
 
-// Set requirePreviousPlyFootprint to false only in contexts where
-// cross-ply validation is intentionally unavailable, such as isolated tests.
+// Movement legality is checked within the current complete plan. The
+// assignment rules do not impose a cross-ply source/destination footprint rule.
 struct ValidationOptions {
-    bool requirePreviousPlyFootprint{true};
-
     // Must match TransitionOptions when validating a simulated transition.
     // The default matches the production transition setting.
     bool convertHumansAfterRandomBattle{true};

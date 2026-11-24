@@ -117,8 +117,8 @@ void logDecisionDiagnostics(const AgentDecision& decision) {
          << " opponent_groups=" << prediction.opponentGroupsObserved
          << " groups_with_predictions=" << prediction.groupsWithPredictions
          << " neighbours_examined=" << prediction.neighbouringCellsExamined
-         << " destinations_rejected="
-         << prediction.destinationsRejectedByPreviousPly
+         << " cross_ply_restrictions="
+         << (decision.crossPlyRestrictionsChecked ? "enabled" : "disabled")
          << " destinations_ranked=" << prediction.destinationsRanked
          << " response_candidates_with_support="
          << search.responseCandidatesWithPositivePredictionSupport

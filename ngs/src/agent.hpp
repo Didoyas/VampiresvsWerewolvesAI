@@ -48,6 +48,7 @@ struct AgentDecision {
     // result was passed into the search.
     bool historyAwareSearchUsed{false};
     bool previousPlyWasUnknown{false};
+    // Always false: cross-ply footprint restrictions are not assignment rules.
     bool crossPlyRestrictionsChecked{false};
 
     // History observation sequence is internal bookkeeping. It is not a

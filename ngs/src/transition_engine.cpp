@@ -516,8 +516,6 @@ TransitionResult applyTurnPlan(
 
     // 2. Validate the entire movement plan before changing the state.
     ValidationOptions validationOptions;
-    validationOptions.requirePreviousPlyFootprint =
-        options.requirePreviousPlyFootprint;
     validationOptions.convertHumansAfterRandomBattle =
         options.convertHumansAfterRandomBattle;
 
@@ -630,31 +628,21 @@ TransitionResult applyTurnPlan(
         }
     }
 
-    // 7. Record the current ply's footprint.
-    //
-    // The next player will need this information to validate
-    // the cross-ply source/destination restrictions.
+    // 7. Retain the last simulated footprint as metadata for diagnostics.
+    // It is not used to impose any cross-ply movement restriction.
     nextState.previousPly.known = true;
     nextState.previousPly.sources.clear();
     nextState.previousPly.destinations.clear();
-
     for (const Move& move : plan.moves) {
-        addUniquePosition(
-            nextState.previousPly.sources,
-            move.source
-        );
-
-        addUniquePosition(
-            nextState.previousPly.destinations,
-            move.destination
-        );
+        addUniquePosition(nextState.previousPly.sources, move.source);
+        addUniquePosition(nextState.previousPly.destinations, move.destination);
     }
 
     // 8. Advance the simulated side-to-move count only after the full turn
-    // has resolved successfully. The counter is relative to board.ourSpecies.
+    // has resolved successfully.
     advanceGameHorizon(nextState, actingSpecies);
 
-    // 9. Construct successful result.
+    // 8. Construct successful result.
     TransitionResult result;
     result.nextState = std::move(nextState);
     result.stats = stats;

@@ -53,7 +53,6 @@ void testAgentReturnsAValidatedPlanAndRecordsHistory() {
            decision.method == AgentDecisionMethod::EmergencyFallback);
 
     ValidationOptions validationOptions;
-    validationOptions.requirePreviousPlyFootprint = false;
     assert(validateTurnPlan(
         board,
         decision.plan,

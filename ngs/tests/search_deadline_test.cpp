@@ -102,7 +102,7 @@ void testAgentReturnsLegalFallbackWhenBudgetIsExhausted() {
     assert(decision.method == AgentDecisionMethod::EmergencyFallback);
     assert(validateTurnPlan(
         board, decision.plan, Species::Vampires,
-        ValidationOptions{true, true}).valid());
+        ValidationOptions{true}).valid());
 }
 
 } // namespace

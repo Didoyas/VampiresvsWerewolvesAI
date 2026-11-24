@@ -364,55 +364,21 @@ void testDestinationRankingIsBounded() {
     assert(result.destinations.size() <= 2);
 }
 
-void testPreviousPlyDestinationRestriction() {
+void testPreviousPlyFootprintDoesNotFilterPredictions() {
     BoardState board = makeBoard();
-
     OpponentHistory history = makeHistory(board);
-
     board.previousPly.known = true;
-
-    // This previous source cannot be a destination now.
     board.previousPly.sources.push_back({2, 1});
-
-    const OpponentPredictionResult result =
-        predictOpponentBehaviour(
-            board,
-            history,
-            3
-        );
-
-    assert(result.valid());
-
-    assert(
-        findDestination(result, {1, 2}, {2, 1}) == nullptr
-    );
-
-    assert(result.stats.destinationsRejectedByPreviousPly > 0);
-}
-
-void testPreviousPlySourceRestriction() {
-    BoardState board = makeBoard();
-
-    OpponentHistory history = makeHistory(board);
-
-    board.previousPly.known = true;
-
-    // A previous destination cannot become a current source.
     board.previousPly.destinations.push_back({1, 2});
 
     const OpponentPredictionResult result =
-        predictOpponentBehaviour(
-            board,
-            history,
-            3
-        );
+        predictOpponentBehaviour(board, history, 3);
 
     assert(result.valid());
-
-    // The only opponent group is at (1,2).
     assert(result.stats.opponentGroupsObserved == 1);
-    assert(result.stats.groupsWithPredictions == 0);
-    assert(result.destinations.empty());
+    assert(result.stats.groupsWithPredictions == 1);
+    assert(!result.destinations.empty());
+    assert(findDestination(result, {1, 2}, {2, 1}) != nullptr);
 }
 
 void testPredictedScoresAreBounded() {
@@ -537,8 +503,7 @@ int main() {
     testHouseProgressInfluencesDestinationScore();
     testDestinationRankingIsBounded();
 
-    testPreviousPlyDestinationRestriction();
-    testPreviousPlySourceRestriction();
+    testPreviousPlyFootprintDoesNotFilterPredictions();
 
     testPredictedScoresAreBounded();
     testOriginalBoardIsNotModified();

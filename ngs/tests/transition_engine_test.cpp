@@ -517,34 +517,19 @@ void testInvalidPlanIsRejected() {
     assert(board.at({1, 1}).vampires == 0);
 }
 
-void testUnknownPreviousFootprintIsRejectedByDefault() {
+void testUnknownPreviousFootprintDoesNotBlockTransition() {
     BoardState board = createTestBoard();
-
     board.previousPly.known = false;
     board.at({1, 1}).vampires = 10;
 
-    TurnPlan plan = createPlan(
-        {1, 1},
-        5,
-        {2, 1}
-    );
-
+    TurnPlan plan = createPlan({1, 1}, 5, {2, 1});
     std::mt19937 rng(42);
 
-    const TransitionResult result =
-        applyTurnPlan(
-            board,
-            plan,
-            Species::Vampires,
-            rng
-        );
+    const TransitionResult result = applyTurnPlan(
+        board, plan, Species::Vampires, rng);
 
-    assert(!result.valid());
-
-    assert(
-        result.validationError ==
-        ValidationError::MissingPreviousPlyFootprint
-    );
+    assert(result.valid());
+    assert(result.nextState.at({2, 1}).vampires == 5);
 }
 
 } // namespace
@@ -574,7 +559,7 @@ int main() {
     testHorizonCounterSaturatesAtPerSideLimit();
 
     testInvalidPlanIsRejected();
-    testUnknownPreviousFootprintIsRejectedByDefault();
+    testUnknownPreviousFootprintDoesNotBlockTransition();
 
     std::cout << "All transition engine tests passed.\n";
 

@@ -116,16 +116,7 @@ CandidateGenerationResult generateSingleMoveCandidates(
         return failure(CandidateGenerationError::InvalidSplitRatio);
     }
 
-    if (options.requirePreviousPlyFootprint &&
-        !board.previousPly.known) {
-        return failure(
-            CandidateGenerationError::MissingPreviousPlyFootprint
-        );
-    }
-
-    ValidationOptions validationOptions;
-    validationOptions.requirePreviousPlyFootprint =
-        options.requirePreviousPlyFootprint;
+    const ValidationOptions validationOptions{};
 
     CandidateGenerationResult result;
 

@@ -27,16 +27,12 @@ struct CandidateGenerationOptions {
         {1, 1}
     };
 
-    // Forwarded to the existing movement validator. Keep true in production.
-    // Set false only for isolated tests where the previous ply is unavailable.
-    bool requirePreviousPlyFootprint{true};
 };
 
 enum class CandidateGenerationError {
     None,
     InvalidBoard,
     InvalidSpecies,
-    MissingPreviousPlyFootprint,
     InvalidSplitRatio
 };
 

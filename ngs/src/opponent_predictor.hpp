@@ -57,9 +57,6 @@ struct OpponentPredictionOptions {
     double houseProgressWeight{0.315};
     double houseHistoryWeight{0.10};
 
-    // Apply the previous-ply source/destination restrictions
-    // when BoardState contains a known previous-ply footprint.
-    bool respectPreviousPlyRestrictions{true};
 };
 
 enum class OpponentPredictionError {
@@ -78,7 +75,6 @@ struct OpponentPredictionStats {
     std::size_t groupsWithPredictions{0};
 
     std::size_t neighbouringCellsExamined{0};
-    std::size_t destinationsRejectedByPreviousPly{0};
 
     std::size_t movementObservationsUsed{0};
     bool directionEvidenceUsed{false};

@@ -46,11 +46,9 @@ void testNgsFactoryAndDecisionEngineContract() {
     assert(!plan.moves.empty());
     assert(plan.moves.size() <= 255);
 
-    // Validate using NGS's movement validator, while explicitly disabling
-    // the cross-ply check because the server protocol does not provide the
-    // previous opponent move footprint.
+    // Validate using the same-ply movement rules. The assignment does not
+    // impose a previous-ply movement-footprint restriction.
     vvw::ngs::ValidationOptions options;
-    options.requirePreviousPlyFootprint = false;
 
     const vvw::ngs::ValidationResult validation =
         vvw::ngs::validateTurnPlan(

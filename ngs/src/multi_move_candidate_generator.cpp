@@ -557,8 +557,6 @@ MultiMoveCandidateError mapStageOneError(CandidateGenerationError error) {
             return MultiMoveCandidateError::InvalidBoard;
         case CandidateGenerationError::InvalidSpecies:
             return MultiMoveCandidateError::InvalidSpecies;
-        case CandidateGenerationError::MissingPreviousPlyFootprint:
-            return MultiMoveCandidateError::MissingPreviousPlyFootprint;
         case CandidateGenerationError::InvalidSplitRatio:
             return MultiMoveCandidateError::InvalidSplitRatio;
     }
@@ -969,8 +967,6 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
     }
 
     ValidationOptions validationOptions;
-    validationOptions.requirePreviousPlyFootprint =
-        options.singleMoveOptions.requirePreviousPlyFootprint;
 
     const auto appendCombination = [&, validationOptions](
         const TurnPlan& plan,
