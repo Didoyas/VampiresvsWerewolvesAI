@@ -11,7 +11,8 @@
 
 namespace {
 const char*  BOT_NAME   = "AlphaBeta";   // shown by the server; change it if you like
-const double TIME_LIMIT = 1.7;           // seconds of search per move (the rule is 2 s)
+const double TIME_LIMIT = 1.2;           // seconds of search per move (the rule is 2 s);
+                                         // 0.8 s of margin for the network and a slow PC
 }
 
 int main(int argc, char** argv) {

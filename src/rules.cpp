@@ -2,12 +2,11 @@
 //
 // Rules from the assignment PDF (pages 3-4), when creatures arrive on a cell:
 //   empty or own species      -> they merge
-//   humans,  we >  humans     -> every human converts to our species
-//   humans,  we <= humans     -> random battle
-// The PDF says "at least as numerous" converts for sure, but the servers compute
-// P = 0.5 when the counts are EQUAL (they test equality first; the Go server copies
-// this from the official Board.cs). So an equal fight is treated as a coin flip,
-// which the bot never counts on: it needs strictly more creatures than the humans.
+//   humans,  we >= humans     -> every human converts to our species
+//   humans,  we <  humans     -> random battle
+// "At least as numerous" converts for sure, as in the PDF; tests on the professor's
+// server confirmed that an attack with exactly as many creatures as humans always
+// converts them. (The open-source Go server makes that case a coin flip instead.)
 //   enemies, we >= 1.5 x them -> they all die, we all survive
 //   enemies, they >= 1.5 x us -> all our attackers die
 //   enemies, otherwise        -> random battle
@@ -51,7 +50,7 @@ void resolveArrival(Group& d, int n, Species who) {
     if (d.species == who) { d.count += n; return; }
 
     if (d.species == Species::Human) {
-        if (n > d.count) { d.count += n; d.species = who; return; }    // sure conversion
+        if (n >= d.count) { d.count += n; d.species = who; return; }   // sure conversion
         double p = winProbability(n, d.count);
         if (p > 0.5) { d.count = int(std::lround(p * (n + d.count))); d.species = who; }
         else           d.count = int(std::lround((1 - p) * d.count));  // humans stay

@@ -9,8 +9,8 @@
 //   4. If the candidate wins clearly, it becomes the new current weights.
 //   5. Repeat for every weight, for a few rounds.
 //
-// Games are refereed like the Go server (the same probability formula, with real
-// random battles), while each bot keeps its own careful model of the rules.
+// Games are refereed with real random battles (equal numbers convert humans, as on
+// the professor's server), while each bot keeps its own careful model of the rules.
 // Maps are point-symmetric, so both sides start in mirrored positions.
 //
 // Usage: twilight_tune [rounds] [maps] [depth] [threads] [step]
@@ -36,7 +36,8 @@ namespace {
 // ---------- Referee: applies a turn like the Go server does ----------
 
 double serverProbability(int e1, int e2, bool humans) {
-    if (e1 == e2) return 0.5;                       // checked first, as in the server
+    if (humans && e1 >= e2) return 1.0;             // professor's server: equal converts
+    if (e1 == e2) return 0.5;
     double cste = humans ? 1.0 : 1.5;
     if (e1 >= cste * e2) return 1.0;
     if (e1 < e2) return 0.5 * e1 / e2;

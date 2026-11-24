@@ -89,11 +89,11 @@ How the code follows the rules in the assignment:
 | Rule 3: enough creatures on a cell for all its moves | a split's two parts add up to the group size |
 | Rule 4: 8 directions, not off the board | every move is one step; off-board cells are skipped |
 | Rule 5: no cell both source and target in one ply | `legal()` in `moves.cpp` |
-| Convert humans: the PDF says at least as many, but the servers make an equal fight a coin flip, so the bot requires strictly more | `resolveArrival()` in `rules.cpp`, `arrivalValue()` in `moves.cpp`, `eatDistance()` in `eval.cpp` |
+| Convert humans: at least as many as them (confirmed on the professor's server) | `resolveArrival()` in `rules.cpp`, `arrivalValue()` in `moves.cpp`, `eatDistance()` in `eval.cpp` |
 | Kill monsters: at least 1.5×; if they are 1.5× us, all attackers die | `resolveArrival()` in `rules.cpp` |
 | Random battles: P = 0.5, E1/(2·E2) or E1/E2 − 0.5 | `winProbability()` in `rules.cpp` |
 | Protocol: 3-letter commands, every number one byte | `Client::receive()`, `Client::sendTurn()` in `client.cpp` |
-| 2 seconds per turn | search stops at 1.7 s; the clock is checked every 16 positions |
+| 2 seconds per turn | search stops at 1.2 s (0.8 s margin for the network and a slow machine); the clock is checked every 16 positions |
 | `END`: clear the game and prepare a new one | game loop in `main.cpp` |
 | Grid sizes and counts are one byte (0–255) | stored as normal integers; tests cover 255×255 and counts up to 255 |
 | IP and port are the last two command-line arguments | `main()` in `main.cpp` |
@@ -116,7 +116,7 @@ POSIX sockets on macOS / Linux and Winsock on Windows. Reads always loop until e
 
 `applyTurn()` moves the creatures, merges groups of the same species, and resolves conversions and battles. The search needs one board per move, so every random battle is resolved pessimistically for the attacker, with the expected number of survivors: the bot never counts on luck.
 
-Two cases differ between the rules PDF and the servers, and the bot plays safe in both. The Go server's probability function, which says it copies the official server's `Board.cs`, checks for equal counts first and returns P = 0.5. So an equal fight against humans is a coin flip, not a sure conversion, and the bot only counts on converting humans when it has strictly more. For monsters with more than the defenders but less than 1.5×, it also returns 0.5 instead of the PDF's E1/E2 − 0.5, so the bot treats every monster fight below 1.5× as a likely loss.
+Against humans, at least as many creatures converts them for sure, as in the PDF; tests on the professor's server confirmed that an attack with exactly as many creatures as humans always converts them. (The open-source Go server used for local testing makes that case a coin flip, so equal attacks can occasionally fail there.) Against monsters, the bot plays safe: any fight below the 1.5× needed for a sure kill is treated as a likely loss.
 
 ### Evaluation (`eval.cpp`)
 
@@ -126,7 +126,7 @@ Scores a board from our point of view, looping over groups only (it runs hundred
 |---|---|
 | Win / loss | ±1,000,000, minus the depth, so faster wins score higher |
 | Material | our creatures − theirs, plus a ratio term (8 vs 4 is safer than 108 vs 104) |
-| Food race | each human group counts for whoever can eat it for sure (strictly more creatures) and gets there first; a tie goes to the side about to move (tempo) |
+| Food race | each human group counts for whoever can eat it for sure (at least as many creatures) and gets there first; a tie goes to the side about to move (tempo) |
 | Attack or run | enemies we can sure-kill nearby are good; enemies that can sure-kill us nearby are bad, much more so when the attacker moves next |
 | Game phase | once all humans are gone, fights count double |
 | Extras | fewer, bigger groups; a tiny preference for the centre |
@@ -143,7 +143,7 @@ Each option gets a fast, battle-aware score:
 
 | Situation | Effect |
 |---|---|
-| Eating humans (group > humans; equal is a coin flip) | bonus |
+| Eating humans (group ≥ humans) | bonus |
 | Sure kill (group ≥ 1.5 × enemy) | bonus |
 | Random battle | penalty |
 | Walking into a sure loss | big penalty |
@@ -159,14 +159,14 @@ The options are combined into at most 20 legal turns, sorted best first, so that
 
 - **Alpha-beta (negamax form):** one function handles both players.
 - **Iterative deepening:** searches depth 1, 2, 3, … and keeps the best move from the last finished depth, so a move is always ready.
-- **Time control:** stops at the given limit (1.7 s), and doesn't start a new depth once half the time is used.
+- **Time control:** stops at the given limit (1.2 s), and doesn't start a new depth once half the time is used.
 - **Transposition table:** each position is hashed in a way that doesn't depend on the order of the groups, so the same position reached by different moves isn't searched twice.
 - **Move ordering:** the previous best move is searched first at the root, and the remembered best move first at every other position.
 - **Always answers:** if the search fails for any reason, `findBestTurn()` falls back to a simple legal one-step move. An AI that can't communicate caps the grade at 10/20.
 
 ### Weight tuning (`tools/tune.cpp`)
 
-The evaluation weights can be tuned automatically by self-play: the tuner changes one weight at a time (× 2.5 or ÷ 2.5), plays the changed bot against the current one on 50 random point-symmetric maps, twice per map with the sides swapped, and keeps the change only if it clearly wins (score ≥ 0.56). Games are refereed like the Go server, with real random battles.
+The evaluation weights can be tuned automatically by self-play: the tuner changes one weight at a time (× 2.5 or ÷ 2.5), plays the changed bot against the current one on 50 random point-symmetric maps, twice per map with the sides swapped, and keeps the change only if it clearly wins (score ≥ 0.56). Games are refereed with real random battles.
 
 ```bash
 ./build/twilight_tune 3 50 6 2          # rounds, maps per test, search depth, threads

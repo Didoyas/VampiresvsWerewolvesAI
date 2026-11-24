@@ -35,7 +35,7 @@ bool sureKill(int attackers, int defenders) { return attackers >= 1.5 * defender
 int eatDistance(const std::vector<const Group*>& side, const Group& h) {
     int best = INT_MAX;
     for (const Group* g : side)
-        if (g->count > h.count) best = std::min(best, dist(*g, h));   // equal = coin flip
+        if (g->count >= h.count) best = std::min(best, dist(*g, h));  // at least as many converts
     return best;
 }
 

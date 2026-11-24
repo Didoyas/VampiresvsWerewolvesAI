@@ -67,11 +67,11 @@ double positionValue(const State& s, Species who, int x, int y, int n,
         if (&g == ignoreEnemy || g.count <= 0) continue;
         int d = std::max(1, dist(x, y, g.x, g.y));
 
-        if (g.species == Species::Human && g.count < n) {   // strictly more: equal is a coin flip
+        if (g.species == Species::Human && g.count <= n) {  // at least as many converts for sure
             // Food race: the enemy moves right after us, so it wins ties.
             bool enemyFirst = false;
             for (const Group& e : s.groups)
-                if (e.species == enemy && e.count > g.count &&
+                if (e.species == enemy && e.count >= g.count &&
                     dist(e.x, e.y, g.x, g.y) <= dist(x, y, g.x, g.y)) { enemyFirst = true; break; }
             if (!enemyFirst) bestFood = std::max(bestFood, double(g.count) / d);
         } else if (g.species == enemy) {
@@ -100,7 +100,7 @@ double arrivalValue(const State& s, Species who, int x, int y, int n, const Grou
     if (!t) return 0;
     if (t->species == who) return W_MERGE;
     if (t->species == Species::Human) {
-        if (n > t->count) return W_EAT * t->count;           // equal = coin flip on the servers
+        if (n >= t->count) return W_EAT * t->count;          // at least as many: sure conversion
         return -W_GAMBLE * n;
     }
     if (sureKill(n, t->count)) { *killed = t; return W_KILL * t->count; }
@@ -113,7 +113,7 @@ int sizeAfter(const State& s, Species who, int x, int y, int n) {
     const Group* t = groupAt(s, x, y);
     if (!t) return n;
     if (t->species == who) return n + t->count;
-    if (t->species == Species::Human && n > t->count) return n + t->count;
+    if (t->species == Species::Human && n >= t->count) return n + t->count;
     return n;
 }
 
@@ -148,11 +148,11 @@ std::vector<Option> optionsForGroup(const State& s, const Group& g, Species who)
         // (the enemy moves right after us, so it wins ties).
         std::vector<const Group*> food;
         for (const Group& h : s.groups) {
-            if (h.species != Species::Human || h.count <= 0 || h.count + 1 >= g.count) continue;
+            if (h.species != Species::Human || h.count <= 0 || h.count >= g.count) continue;
             int myD = dist(g.x, g.y, h.x, h.y) - 1;          // after our first step
             bool lost = false;
             for (const Group& e : s.groups)
-                if (e.species == enemyOf(who) && e.count > h.count &&
+                if (e.species == enemyOf(who) && e.count >= h.count &&
                     dist(e.x, e.y, h.x, h.y) <= myD) { lost = true; break; }
             if (!lost) food.push_back(&h);
         }
@@ -166,8 +166,8 @@ std::vector<Option> optionsForGroup(const State& s, const Group& g, Species who)
             for (size_t j = 0; j < food.size(); ++j) {
                 if (i == j) continue;
                 const Group *a = food[i], *b = food[j];
-                int n1 = a->count + 1, n2 = g.count - n1;  // one more than a (equal is a coin flip), the rest to b
-                if (n2 <= b->count) continue;
+                int n1 = a->count, n2 = g.count - n1;      // just enough for a, the rest to b
+                if (n2 < b->count) continue;
                 int x1 = g.x + sgn(a->x - g.x), y1 = g.y + sgn(a->y - g.y);
                 int x2 = g.x + sgn(b->x - g.x), y2 = g.y + sgn(b->y - g.y);
                 if (x1 == x2 && y1 == y2) continue;        // same step: not a real split

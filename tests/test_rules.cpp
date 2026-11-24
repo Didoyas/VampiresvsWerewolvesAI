@@ -24,13 +24,13 @@ int main() {
     const Species V = Species::Vampire, W = Species::Werewolf, H = Species::Human;
     std::cout << "rules.cpp\n";
 
-    // Converting humans: strictly more than them (the servers make an equal fight a coin flip).
+    // Converting humans: at least as many as them (confirmed on the professor's server).
     State s = applyTurn(board({{1,1,5,V}, {2,2,4,H}}), {{1,1,5,2,2}}, V);
     check("5 vampires on 4 humans -> 9 vampires", at(s,2,2) && at(s,2,2)->species == V && at(s,2,2)->count == 9);
     check("the source cell is now empty", at(s,1,1) == nullptr);
 
     s = applyTurn(board({{1,1,4,V}, {2,2,4,H}}), {{1,1,4,2,2}}, V);
-    check("4 vampires on 4 humans -> coin flip (P = 0.5), counted as a loss", at(s,2,2) && at(s,2,2)->species == H);
+    check("4 vampires on 4 humans (equal) -> sure conversion, 8 vampires", at(s,2,2) && at(s,2,2)->species == V && at(s,2,2)->count == 8);
 
     s = applyTurn(board({{1,1,3,V}, {2,2,4,H}}), {{1,1,3,2,2}}, V);
     check("3 vampires on 4 humans -> random battle, humans most likely stay",
