@@ -41,6 +41,35 @@ struct HouseObjective {
     Population humans{0};
 };
 
+struct GroupDirective {
+    Position source{};
+    Population population{0};
+    bool hasTarget{false};
+    bool primaryTarget{false};
+    Position target{};
+    bool threatened{false};
+    std::uint64_t nearbyEnemyPopulation{0};
+    int nearestEnemyDistance{1000000};
+    bool hasReinforcement{false};
+    Position reinforcement{};
+};
+
+struct CoordinationResult {
+    // Indexed by board.index(source). Empty cells have population == 0.
+    std::vector<GroupDirective> byCell;
+    std::vector<int> nearestEnemyDistanceByCell;
+    std::vector<Position> primaryTargets;
+    std::size_t groupsAssigned{0};
+    std::size_t distinctTargetsAssigned{0};
+    std::size_t threatenedGroups{0};
+};
+
+struct AssignmentCandidate {
+    std::size_t groupIndex{0};
+    std::size_t houseIndex{0};
+    double utility{0.0};
+};
+
 Population populationFor(const Cell& cell, Species species) noexcept {
     if (species == Species::Vampires) {
         return cell.vampires;
@@ -57,6 +86,313 @@ int chebyshevDistance(Position lhs, Position rhs) noexcept {
     return dx > dy ? dx : dy;
 }
 
+// Assign at most one primary group to each active house. Feasible group-house
+// pairs are ranked globally, so two nearby groups do not automatically chase
+// the same objective. Unassigned groups can become support groups when their
+// combined population with a primary group can capture that house.
+CoordinationResult buildCoordination(
+    const BoardState& board,
+    Species actingSpecies,
+    const std::vector<HouseObjective>& houses,
+    SearchDeadline deadline,
+    bool& timedOut
+) {
+    CoordinationResult result;
+    result.byCell.resize(board.cells.size());
+
+    struct GroupRecord {
+        Position source{};
+        Population population{0};
+        std::size_t cellIndex{0};
+    };
+    std::vector<GroupRecord> groups;
+    std::vector<std::size_t> enemyCellIndices;
+    groups.reserve(board.cells.size());
+    enemyCellIndices.reserve(board.cells.size());
+
+    for (std::size_t i = 0; i < board.cells.size(); ++i) {
+        if ((i & 63U) == 0U && deadlineReached(deadline)) {
+            timedOut = true;
+            return result;
+        }
+        const Cell& cell = board.cells[i];
+        const Population own = populationFor(cell, actingSpecies);
+        if (own > 0) {
+            const Position source{
+                static_cast<int>(i % static_cast<std::size_t>(board.columns)),
+                static_cast<int>(i / static_cast<std::size_t>(board.columns))
+            };
+            groups.push_back({source, own, i});
+            result.byCell[i].source = source;
+            result.byCell[i].population = own;
+        }
+        if (populationFor(cell, opponentOf(actingSpecies)) > 0) {
+            enemyCellIndices.push_back(i);
+        }
+    }
+
+    // Build an eight-neighbour distance field from enemy cells once. Candidate
+    // scoring then performs O(1) threat-distance lookups instead of rescanning
+    // the whole board for every possible move.
+    result.nearestEnemyDistanceByCell.assign(board.cells.size(), 1000000);
+    std::vector<std::size_t> enemyQueue;
+    enemyQueue.reserve(board.cells.size());
+    for (const std::size_t enemyIndex : enemyCellIndices) {
+        result.nearestEnemyDistanceByCell[enemyIndex] = 0;
+        enemyQueue.push_back(enemyIndex);
+    }
+    for (std::size_t head = 0; head < enemyQueue.size(); ++head) {
+        if ((head & 63U) == 0U && deadlineReached(deadline)) {
+            timedOut = true;
+            return result;
+        }
+        const std::size_t current = enemyQueue[head];
+        const int x = static_cast<int>(current % static_cast<std::size_t>(board.columns));
+        const int y = static_cast<int>(current / static_cast<std::size_t>(board.columns));
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) continue;
+                const int nx = x + dx;
+                const int ny = y + dy;
+                if (nx < 0 || ny < 0 || nx >= board.columns || ny >= board.rows) continue;
+                const std::size_t next =
+                    static_cast<std::size_t>(ny) * static_cast<std::size_t>(board.columns) +
+                    static_cast<std::size_t>(nx);
+                if (result.nearestEnemyDistanceByCell[next] <=
+                    result.nearestEnemyDistanceByCell[current] + 1) continue;
+                result.nearestEnemyDistanceByCell[next] =
+                    result.nearestEnemyDistanceByCell[current] + 1;
+                enemyQueue.push_back(next);
+            }
+        }
+    }
+
+    // Threat assessment and nearest-friendly reinforcement target.
+    for (std::size_t g = 0; g < groups.size(); ++g) {
+        if (deadlineReached(deadline)) {
+            timedOut = true;
+            return result;
+        }
+        GroupDirective& directive = result.byCell[groups[g].cellIndex];
+        int nearestFriendlyDistance = 1000000;
+        directive.nearestEnemyDistance =
+            result.nearestEnemyDistanceByCell[groups[g].cellIndex];
+        for (std::size_t other = 0; other < groups.size(); ++other) {
+            if (other == g) continue;
+            const int distance = chebyshevDistance(
+                groups[g].source, groups[other].source
+            );
+            if (distance < nearestFriendlyDistance) {
+                nearestFriendlyDistance = distance;
+                directive.hasReinforcement = true;
+                directive.reinforcement = groups[other].source;
+            }
+        }
+
+        for (std::size_t enemyOffset = 0;
+             enemyOffset < enemyCellIndices.size(); ++enemyOffset) {
+            if ((enemyOffset & 63U) == 0U && deadlineReached(deadline)) {
+                timedOut = true;
+                return result;
+            }
+            const std::size_t enemyIndex = enemyCellIndices[enemyOffset];
+            const Position enemy{
+                static_cast<int>(enemyIndex % static_cast<std::size_t>(board.columns)),
+                static_cast<int>(enemyIndex / static_cast<std::size_t>(board.columns))
+            };
+            const int distance = chebyshevDistance(groups[g].source, enemy);
+            // Only adjacent enemy groups count toward deterministic immediate
+            // danger. The nearest-enemy distance field separately anticipates
+            // threats that can approach over the next movement.
+            if (distance <= 1) {
+                directive.nearbyEnemyPopulation += populationFor(
+                    board.cells[enemyIndex], opponentOf(actingSpecies)
+                );
+            }
+        }
+
+        directive.threatened =
+            directive.nearbyEnemyPopulation > 0 &&
+            2ULL * directive.nearbyEnemyPopulation >=
+                3ULL * static_cast<std::uint64_t>(directive.population);
+        if (directive.threatened) ++result.threatenedGroups;
+    }
+
+    if (houses.empty() || groups.empty()) return result;
+
+    std::vector<AssignmentCandidate> candidates;
+    candidates.reserve(groups.size() * houses.size());
+    for (std::size_t g = 0; g < groups.size(); ++g) {
+        if (deadlineReached(deadline)) {
+            timedOut = true;
+            return result;
+        }
+        for (std::size_t h = 0; h < houses.size(); ++h) {
+            // The primary assignment is reserved for groups that can capture
+            // the house without relying on another group.
+            if (groups[g].population < houses[h].humans) continue;
+            const int distance = chebyshevDistance(
+                groups[g].source, houses[h].position
+            );
+            const GroupDirective& directive =
+                result.byCell[groups[g].cellIndex];
+            const double forceRatio = static_cast<double>(groups[g].population) /
+                static_cast<double>(std::max<Population>(1, houses[h].humans));
+            const double threatPenalty = directive.threatened ? 180.0 : 0.0;
+            const double utility =
+                1000.0 - 100.0 * static_cast<double>(distance) +
+                35.0 * std::min(forceRatio, 3.0) +
+                0.25 * static_cast<double>(houses[h].humans) - threatPenalty;
+            candidates.push_back({g, h, utility});
+        }
+    }
+
+    std::stable_sort(
+        candidates.begin(), candidates.end(),
+        [](const AssignmentCandidate& lhs, const AssignmentCandidate& rhs) {
+            if (lhs.utility != rhs.utility) return lhs.utility > rhs.utility;
+            if (lhs.groupIndex != rhs.groupIndex) return lhs.groupIndex < rhs.groupIndex;
+            return lhs.houseIndex < rhs.houseIndex;
+        }
+    );
+
+    std::vector<unsigned char> groupAssigned(groups.size(), 0);
+    std::vector<unsigned char> houseAssigned(houses.size(), 0);
+    for (const AssignmentCandidate& candidate : candidates) {
+        if (deadlineReached(deadline)) {
+            timedOut = true;
+            return result;
+        }
+        if (groupAssigned[candidate.groupIndex] || houseAssigned[candidate.houseIndex]) {
+            continue;
+        }
+        const GroupRecord& group = groups[candidate.groupIndex];
+        GroupDirective& directive = result.byCell[group.cellIndex];
+        directive.hasTarget = true;
+        directive.primaryTarget = true;
+        directive.target = houses[candidate.houseIndex].position;
+        groupAssigned[candidate.groupIndex] = 1;
+        houseAssigned[candidate.houseIndex] = 1;
+        result.primaryTargets.push_back(houses[candidate.houseIndex].position);
+        ++result.groupsAssigned;
+        ++result.distinctTargetsAssigned;
+    }
+
+    // If no single group can capture an unclaimed house, allocate a pair whose
+    // combined strength is sufficient. Both groups receive the same objective,
+    // explicitly signalling that a merge is strategically useful.
+    for (std::size_t h = 0; h < houses.size(); ++h) {
+        if (deadlineReached(deadline)) {
+            timedOut = true;
+            return result;
+        }
+        if (houseAssigned[h]) continue;
+        double bestUtility = -1.0e30;
+        std::size_t bestFirst = groups.size();
+        std::size_t bestSecond = groups.size();
+        for (std::size_t first = 0; first < groups.size(); ++first) {
+            if ((first & 31U) == 0U && deadlineReached(deadline)) {
+                timedOut = true;
+                return result;
+            }
+            if (groupAssigned[first]) continue;
+            for (std::size_t second = first + 1; second < groups.size(); ++second) {
+                if ((second & 255U) == 0U && deadlineReached(deadline)) {
+                    timedOut = true;
+                    return result;
+                }
+                if (groupAssigned[second]) continue;
+                const std::uint64_t combined =
+                    static_cast<std::uint64_t>(groups[first].population) +
+                    static_cast<std::uint64_t>(groups[second].population);
+                if (combined < houses[h].humans) continue;
+                const int firstDistance = chebyshevDistance(
+                    groups[first].source, houses[h].position
+                );
+                const int secondDistance = chebyshevDistance(
+                    groups[second].source, houses[h].position
+                );
+                const double utility = 600.0 -
+                    75.0 * static_cast<double>(firstDistance + secondDistance) +
+                    0.1 * static_cast<double>(combined);
+                if (utility > bestUtility) {
+                    bestUtility = utility;
+                    bestFirst = first;
+                    bestSecond = second;
+                }
+            }
+        }
+        if (bestFirst < groups.size() && bestSecond < groups.size()) {
+            for (const std::size_t selected : {bestFirst, bestSecond}) {
+                GroupDirective& directive = result.byCell[groups[selected].cellIndex];
+                directive.hasTarget = true;
+                directive.primaryTarget = false;
+                directive.target = houses[h].position;
+                groupAssigned[selected] = 1;
+                ++result.groupsAssigned;
+            }
+            houseAssigned[h] = 1;
+            result.primaryTargets.push_back(houses[h].position);
+            ++result.distinctTargetsAssigned;
+        }
+    }
+
+    // A second group is assigned as support only when the combined available
+    // force reaches the house's deterministic conversion threshold. This
+    // encourages a useful merge instead of two unrelated weak advances.
+    for (std::size_t g = 0; g < groups.size(); ++g) {
+        if (deadlineReached(deadline)) {
+            timedOut = true;
+            return result;
+        }
+        if (groupAssigned[g]) continue;
+        const GroupRecord& group = groups[g];
+        double bestSupportUtility = -1.0e30;
+        std::size_t bestHouse = houses.size();
+        for (std::size_t h = 0; h < houses.size(); ++h) {
+            std::uint64_t combined = group.population;
+            int primaryDistance = 1000000;
+            bool hasPrimary = false;
+            for (std::size_t primary = 0; primary < groups.size(); ++primary) {
+                if ((primary & 255U) == 0U && deadlineReached(deadline)) {
+                    timedOut = true;
+                    return result;
+                }
+                if (!groupAssigned[primary]) continue;
+                const GroupDirective& primaryDirective =
+                    result.byCell[groups[primary].cellIndex];
+                if (primaryDirective.target != houses[h].position ||
+                    !primaryDirective.primaryTarget ||
+                    !primaryDirective.threatened) continue;
+                combined += groups[primary].population;
+                primaryDistance = std::min(
+                    primaryDistance,
+                    chebyshevDistance(groups[primary].source, houses[h].position)
+                );
+                hasPrimary = true;
+            }
+            if (!hasPrimary || combined < houses[h].humans) continue;
+            const int distance = chebyshevDistance(group.source, houses[h].position);
+            const double utility = 500.0 - 80.0 * static_cast<double>(distance) -
+                10.0 * static_cast<double>(primaryDistance);
+            if (utility > bestSupportUtility) {
+                bestSupportUtility = utility;
+                bestHouse = h;
+            }
+        }
+        if (bestHouse < houses.size()) {
+            GroupDirective& directive = result.byCell[group.cellIndex];
+            directive.hasTarget = true;
+            directive.primaryTarget = false;
+            directive.target = houses[bestHouse].position;
+            groupAssigned[g] = 1;
+            ++result.groupsAssigned;
+        }
+    }
+
+    return result;
+}
+
 // A cheap pre-ranking score used only to decide which legal moves survive the
 // bounded candidate portfolio. The full transition/evaluation/search remains
 // authoritative. House progress is rewarded only when the moving group (plus
@@ -67,6 +403,8 @@ double scoreSingleMovePriority(
     Species actingSpecies,
     const Move& move,
     const std::vector<HouseObjective>& houseObjectives,
+    const CoordinationResult& coordination,
+    MultiMoveCandidateStats& stats,
     SearchDeadline deadline,
     bool& timedOut
 ) noexcept {
@@ -116,6 +454,8 @@ double scoreSingleMovePriority(
     // the competition maps contain relatively few houses compared with cells,
     // so this loop scales with active objectives rather than all board cells.
     double bestHouseProgress = 0.0;
+    const GroupDirective& directive =
+        coordination.byCell[board.index(move.source)];
     for (const HouseObjective& objective : houseObjectives) {
         if (deadlineReached(deadline)) {
             timedOut = true;
@@ -137,12 +477,56 @@ double scoreSingleMovePriority(
         const double after = 1.0 / (1.0 + destinationDistance);
         const double houseWeight =
             4.0 * static_cast<double>(objective.humans);
-        const double progress = houseWeight * (after - before);
-        if (progress > bestHouseProgress) {
-            bestHouseProgress = progress;
+        double assignmentWeight = 0.70;
+        if (directive.hasTarget && directive.target == objective.position) {
+            assignmentWeight = directive.primaryTarget ? 3.0 : 2.2;
+        } else {
+            // A group may still split toward a second unclaimed house, but it
+            // should not steal priority from another group's primary target.
+            const bool assignedToAnotherGroup = std::find(
+                coordination.primaryTargets.begin(),
+                coordination.primaryTargets.end(),
+                objective.position
+            ) != coordination.primaryTargets.end();
+            if (assignedToAnotherGroup) assignmentWeight = 0.25;
         }
+        const double progress =
+            houseWeight * (after - before) * assignmentWeight;
+        if (progress > bestHouseProgress) bestHouseProgress = progress;
     }
     priority += 30.0 * bestHouseProgress;
+
+    // Threat-aware movement: an outnumbered group should avoid closing with
+    // the threatening force and prefer moving toward a nearby friendly group.
+    // The full transition/search still evaluates attacks and resulting states.
+    if (directive.threatened) {
+        const int destinationEnemyDistance =
+            coordination.nearestEnemyDistanceByCell[
+                board.index(move.destination)
+            ];
+        priority += 28.0 * static_cast<double>(
+            destinationEnemyDistance - directive.nearestEnemyDistance
+        );
+        if (directive.hasReinforcement) {
+            const int beforeReinforcement = chebyshevDistance(
+                move.source, directive.reinforcement
+            );
+            const int afterReinforcement = chebyshevDistance(
+                move.destination, directive.reinforcement
+            );
+            if (afterReinforcement < beforeReinforcement) {
+                priority += 24.0 * static_cast<double>(
+                    beforeReinforcement - afterReinforcement
+                );
+                ++stats.reinforcementMovesPrioritized;
+            }
+        }
+        if (enemyAtDestination > 0 &&
+            2ULL * effectiveDestinationPopulation <
+                3ULL * static_cast<std::uint64_t>(enemyAtDestination)) {
+            priority -= 150.0;
+        }
+    }
 
     // Avoid choosing a split that strands a tiny remnant at the source. This
     // is a modest tie-break penalty, not a legality rule or hard constraint.
@@ -229,6 +613,8 @@ std::vector<SourceBucket> makeSourceBuckets(
     Species actingSpecies,
     const CandidateGenerationResult& singles,
     const std::vector<HouseObjective>& houseObjectives,
+    const CoordinationResult& coordination,
+    MultiMoveCandidateStats& stats,
     SearchDeadline deadline,
     bool& timedOut
 ) {
@@ -261,7 +647,8 @@ std::vector<SourceBucket> makeSourceBuckets(
         }
 
         const double priority = scoreSingleMovePriority(
-            board, actingSpecies, move, houseObjectives, deadline, timedOut
+            board, actingSpecies, move, houseObjectives, coordination,
+            stats, deadline, timedOut
         );
         SourceBucket& bucket = buckets[bucketIndex];
         bucket.moves.push_back({move, priority});
@@ -322,6 +709,7 @@ std::vector<DestinationBucket> makeDestinationBuckets(
     const BoardState& board,
     Species actingSpecies,
     const std::vector<SourceBucket>& sources,
+    const CoordinationResult& coordination,
     SearchDeadline deadline,
     bool& timedOut
 ) {
@@ -415,6 +803,20 @@ std::vector<DestinationBucket> makeDestinationBuckets(
 
                 if (friendlyAtTarget > 0) {
                     combinedPriority = std::max(combinedPriority, 8.0);
+                }
+
+                const GroupDirective& firstDirective =
+                    coordination.byCell[board.index(first.source)];
+                const GroupDirective& secondDirective =
+                    coordination.byCell[board.index(second.source)];
+                if (firstDirective.hasTarget && secondDirective.hasTarget &&
+                    firstDirective.target == bucket.destination &&
+                    secondDirective.target == bucket.destination &&
+                    totalFriendly >= target.humans) {
+                    combinedPriority = std::max(
+                        combinedPriority,
+                        1400.0 + 10.0 * static_cast<double>(target.humans)
+                    );
                 }
             }
         }
@@ -523,9 +925,31 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
             }
         }
     }
+    const CoordinationResult coordination = buildCoordination(
+        board, actingSpecies, houseObjectives, deadline, helperTimedOut
+    );
+    if (helperTimedOut || deadlineReached(deadline)) {
+        result.timedOut = true;
+        // Preserve a small legal fallback portfolio from Stage 1 if the
+        // coordination pass consumes the remaining deadline.
+        const std::size_t fallbackCount = std::min(
+            options.maxSingleMoveCandidates, singles.candidates.size()
+        );
+        result.candidates.insert(
+            result.candidates.end(), singles.candidates.begin(),
+            singles.candidates.begin() + static_cast<std::ptrdiff_t>(fallbackCount)
+        );
+        result.stats.singleMoveCandidatesIncluded = fallbackCount;
+        return result;
+    }
+    result.stats.groupsAssignedToHouses = coordination.groupsAssigned;
+    result.stats.distinctHouseTargetsAssigned =
+        coordination.distinctTargetsAssigned;
+    result.stats.threatenedGroupsDetected = coordination.threatenedGroups;
+
     const std::vector<SourceBucket> buckets = makeSourceBuckets(
-        board, actingSpecies, singles, houseObjectives,
-        deadline, helperTimedOut
+        board, actingSpecies, singles, houseObjectives, coordination,
+        result.stats, deadline, helperTimedOut
     );
     result.stats.sourceGroupsAvailable = buckets.size();
 
@@ -663,7 +1087,8 @@ MultiMoveCandidateResult generateMultiMoveCandidates(
         !result.timedOut) {
         const std::vector<DestinationBucket> destinations =
             makeDestinationBuckets(
-                board, actingSpecies, buckets, deadline, helperTimedOut
+                board, actingSpecies, buckets, coordination,
+                deadline, helperTimedOut
             );
         if (helperTimedOut) {
             result.timedOut = true;

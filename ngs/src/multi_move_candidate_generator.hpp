@@ -61,6 +61,11 @@ struct MultiMoveCandidateStats {
     std::size_t twoMoveCandidatesGenerated{0};
     std::size_t splitPlansGenerated{0};
     std::size_t mergePlansGenerated{0};
+    // Board-level coordination decisions used to guide candidate priorities.
+    std::size_t groupsAssignedToHouses{0};
+    std::size_t distinctHouseTargetsAssigned{0};
+    std::size_t threatenedGroupsDetected{0};
+    std::size_t reinforcementMovesPrioritized{0};
     std::size_t threeMoveCandidatesGenerated{0};
     std::size_t fourMoveCandidatesGenerated{0};
 

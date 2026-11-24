@@ -153,6 +153,14 @@ void logDecisionDiagnostics(const AgentDecision& decision) {
          << decision.candidateGenerationStats.splitPlansGenerated
          << " merge_plans_generated="
          << decision.candidateGenerationStats.mergePlansGenerated
+         << " groups_assigned="
+         << decision.candidateGenerationStats.groupsAssignedToHouses
+         << " distinct_house_targets="
+         << decision.candidateGenerationStats.distinctHouseTargetsAssigned
+         << " threatened_groups="
+         << decision.candidateGenerationStats.threatenedGroupsDetected
+         << " reinforcement_moves_prioritized="
+         << decision.candidateGenerationStats.reinforcementMovesPrioritized
          << " triples_generated="
          << decision.candidateGenerationStats.threeMoveCandidatesGenerated
          << " quads_generated="

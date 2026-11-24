@@ -490,6 +490,8 @@ void testMergePlansCombineGroupsToCaptureOneHouse() {
 
     assert(result.valid());
     assert(result.stats.mergePlansGenerated > 0);
+    assert(result.stats.groupsAssignedToHouses == 2);
+    assert(result.stats.distinctHouseTargetsAssigned == 1);
 
     bool foundSuccessfulMerge = false;
     for (const TurnPlan& plan : result.candidates) {
@@ -544,6 +546,93 @@ void testSplitAndMergePlansStayWithinSharedPairQuota() {
            result.stats.twoMoveCandidatesGenerated);
 }
 
+void testIndependentGroupsReceiveDistinctHouseObjectives() {
+    BoardState board;
+    board.rows = 8;
+    board.columns = 8;
+    board.cells.resize(64);
+    board.ourSpecies = Species::Vampires;
+    board.previousPly.known = true;
+
+    board.at({0, 1}).vampires = 30;
+    board.at({7, 6}).vampires = 30;
+    board.at({2, 1}).humans = 10;
+    board.at({2, 1}).isHouse = true;
+    board.at({5, 6}).humans = 10;
+    board.at({5, 6}).isHouse = true;
+
+    MultiMoveCandidateOptions options;
+    options.maxSingleMoveCandidates = 2;
+    options.maxTwoMoveCandidates = 0;
+    options.maxThreeMoveCandidates = 0;
+    options.maxFourMoveCandidates = 0;
+
+    const MultiMoveCandidateResult result =
+        generateMultiMoveCandidates(board, Species::Vampires, options);
+
+    assert(result.valid());
+    assert(result.stats.groupsAssignedToHouses == 2);
+    assert(result.stats.distinctHouseTargetsAssigned == 2);
+    assert(result.candidates.size() == 2);
+
+    std::set<std::pair<int, int>> sources;
+    for (const TurnPlan& plan : result.candidates) {
+        assert(plan.moves.size() == 1);
+        const Move& move = plan.moves.front();
+        sources.insert({move.source.x, move.source.y});
+        if (move.source == Position{0, 1}) {
+            assert(chebyshevDistanceForTest(move.destination, {2, 1}) < 2);
+        } else if (move.source == Position{7, 6}) {
+            assert(chebyshevDistanceForTest(move.destination, {5, 6}) < 2);
+        } else {
+            assert(false && "unexpected source group in target allocation");
+        }
+    }
+    assert(sources.size() == 2);
+}
+
+void testThreatenedGroupPrioritizesRetreatAndReinforcement() {
+    BoardState board;
+    board.rows = 7;
+    board.columns = 7;
+    board.cells.resize(49);
+    board.ourSpecies = Species::Vampires;
+    board.previousPly.known = true;
+
+    // The 12-creature group is adjacent to a 20-creature werewolf group.
+    // A larger friendly force is to its west.
+    board.at({3, 3}).vampires = 12;
+    board.at({0, 3}).vampires = 30;
+    board.at({4, 3}).werewolves = 20;
+
+    MultiMoveCandidateOptions options;
+    options.maxSingleMoveCandidates = 1;
+    options.maxTwoMoveCandidates = 0;
+    options.maxThreeMoveCandidates = 0;
+    options.maxFourMoveCandidates = 0;
+
+    const MultiMoveCandidateResult result =
+        generateMultiMoveCandidates(board, Species::Vampires, options);
+
+    assert(result.valid());
+    assert(result.stats.threatenedGroupsDetected == 1);
+    assert(result.stats.reinforcementMovesPrioritized > 0);
+    assert(result.candidates.size() == 1);
+
+    const Move& selected = result.candidates.front().moves.front();
+    assert((selected.source == Position{3, 3}));
+    const int beforeEnemyDistance =
+        chebyshevDistanceForTest(selected.source, {4, 3});
+    const int afterEnemyDistance =
+        chebyshevDistanceForTest(selected.destination, {4, 3});
+    const int beforeFriendlyDistance =
+        chebyshevDistanceForTest(selected.source, {0, 3});
+    const int afterFriendlyDistance =
+        chebyshevDistanceForTest(selected.destination, {0, 3});
+    assert(afterEnemyDistance > beforeEnemyDistance);
+    assert(afterFriendlyDistance < beforeFriendlyDistance);
+}
+
 void testNoAvailableGroupsProducesValidEmptyResult() {
     BoardState board = makeBoard();
 
@@ -576,6 +665,8 @@ int main() {
     testSplitPlansDistributeOneGroupToTwoHouses();
     testMergePlansCombineGroupsToCaptureOneHouse();
     testSplitAndMergePlansStayWithinSharedPairQuota();
+    testIndependentGroupsReceiveDistinctHouseObjectives();
+    testThreatenedGroupPrioritizesRetreatAndReinforcement();
     testNoAvailableGroupsProducesValidEmptyResult();
 
     std::cout << "All multi-move candidate generator tests passed.\n";
